@@ -25576,7 +25576,11 @@ function player3DDrawActor(actor, g = window, options = {}) {
       x:actor.x,y:actor.y,aimAngle:actor.aimAngle,moveAngle:actor.moveAngle,
       weaponKick:actor.weaponKick,walkCycle:actor.walkCycle,gait:actor.gait,jetpackHeight:actor.jetpackHeight,
       stance:{crouch:stance.crouch||0,prone:stance.prone||0,scaleX:stance.scaleX||1}};
-    if(Player3D.draw(snapshot,target,{...options,view})!==true)return false;
+    // Level 1: the model casts its own shadow, and standing in a building's
+    // shadow shades the model. Both come back from one call so they agree.
+    const tint=target===window.drawingContext&&options.mode!=='BOXING'&&options.mode!=='QUICKDRAW'&&
+      !options.skeleton&&typeof celFigureCast3D==='function'?celFigureCast3D(actor,snapshot,target,options):null;
+    if(Player3D.draw(snapshot,target,tint?{...options,view,tint}:{...options,view})!==true)return false;
     _player3DLiveSnapshots.set(actor,snapshot);
     return true;
   } catch (_) {
@@ -53030,22 +53034,176 @@ function celFigureSkeleton(c, pose, fall) {
   }
   return _cfsN;
 }
+// IS THIS SPOT IN A BUILDING'S SHADOW?
+//
+// The buildings' shadows are painted on the ground before anything stands on
+// it, so on their own they darken the road and nothing else: a figure walking
+// into one stays fully lit and goes on casting a second shadow inside the
+// first. This answers the question the painted shadow cannot -- for a point at
+// (x, y) and height z, does the sun's ray back toward the sun pass through a
+// building before it clears the roof? A segment against a handful of rects.
+//
+// It is sampled at five nearby points and each one ramps over its last few
+// units of overlap, so walking across a shadow's edge fades the figure rather
+// than switching it. Answers are kept per actor for the frame, because the
+// shadow and the body both ask.
+const _celShadeCache = new WeakMap();
+const _celShadeList = [];
+function _celShadeGather(x, y, reach) {
+  const list = _celShadeList; list.length = 0;
+  if (typeof colNear !== 'function') return list;
+  for (let i = 0; i < 3; i++) {
+    const near = colNear(x - LIGHT_DX * reach * i * 0.5, y - LIGHT_DY * reach * i * 0.5);
+    for (let j = 0; j < near.length; j++) {
+      const b = near[j];
+      if (!b.isBlockBuilding || b.isBiomeProp || !(b.w > 0) || !(b.h > 0) || list.indexOf(b) >= 0) continue;
+      // colNear() hands back the whole ring when its grid is stale.
+      if (Math.abs(x - b.x) > b.w / 2 + reach * 2 || Math.abs(y - b.y) > b.h / 2 + reach * 2) continue;
+      // Standing inside a footprint is a roof question, not a shadow one.
+      if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) continue;
+      list.push(b);
+      if (list.length >= 12) return list;
+    }
+  }
+  return list;
+}
+function _celShadeHeight(b) {
+  const rise = buildingRise(b);
+  if (typeof CityBuildings3D !== 'undefined' && CityBuildings3D.profile(b)) {
+    const p = CityBuildings3D.plan(b);
+    if (p) return rise + (p.maxZ - rise) * 0.45;
+  }
+  return Math.min(84, Math.max(rise, Math.min(b.w, b.h) * 0.10));
+}
+function _celShadeRay(list, x, y, z, k) {
+  const ux = -LIGHT_DX, uy = -LIGHT_DY;          // toward the sun
+  let best = 0;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i], len = k * (_celShadeHeight(b) - z);
+    if (!(len > 0)) continue;
+    let t0 = 0, t1 = len;
+    const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2, y0 = b.y - b.h / 2, y1 = b.y + b.h / 2;
+    if (Math.abs(ux) < 1e-6) { if (x < x0 || x > x1) continue; }
+    else { const a = (x0 - x) / ux, c = (x1 - x) / ux; t0 = Math.max(t0, Math.min(a, c)); t1 = Math.min(t1, Math.max(a, c)); }
+    if (Math.abs(uy) < 1e-6) { if (y < y0 || y > y1) continue; }
+    else { const a = (y0 - y) / uy, c = (y1 - y) / uy; t0 = Math.max(t0, Math.min(a, c)); t1 = Math.min(t1, Math.max(a, c)); }
+    const ov = t1 - t0;
+    if (ov > 0) { const v = ov > 5 ? 1 : ov / 5; if (v > best) best = v; if (best >= 1) return 1; }
+  }
+  return best;
+}
+// {feet, body}: 0 in the sun, 1 fully shaded.
+function celFigureShade(c) {
+  let rec = _celShadeCache.get(c);
+  if (rec && rec.frame === frameCount && rec.x === c.x && rec.y === c.y) return rec;
+  if (!rec) { rec = { frame: -1, x: 0, y: 0, feet: 0, body: 0 }; _celShadeCache.set(c, rec); }
+  rec.frame = frameCount; rec.x = c.x; rec.y = c.y; rec.feet = 0; rec.body = 0;
+  const k = shadowLengthScale() * CEL_SHADOW_REACH;
+  const list = _celShadeGather(c.x, c.y, k * 46);
+  if (!list.length) return rec;
+  const px = -LIGHT_DY * 3.5, py = LIGHT_DX * 3.5, ax = LIGHT_DX * 3.5, ay = LIGHT_DY * 3.5;
+  let f = 0, bd = 0;
+  for (let i = 0; i < 5; i++) {
+    const ox = i === 1 ? px : i === 2 ? -px : i === 3 ? ax : i === 4 ? -ax : 0;
+    const oy = i === 1 ? py : i === 2 ? -py : i === 3 ? ay : i === 4 ? -ay : 0;
+    f += _celShadeRay(list, c.x + ox, c.y + oy, 0, k);
+    bd += _celShadeRay(list, c.x + ox, c.y + oy, CEL_FIGURE_H * 0.55, k);
+  }
+  rec.feet = f / 5; rec.body = bd / 5;
+  return rec;
+}
+function celShadowAlpha() {
+  const SD = shadowDensity();
+  return Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
+}
+
+// THE MODEL CASTS ITS OWN SHADOW.
+//
+// Where a figure is drawn from the Blender model, the shadow is that model:
+// the same posed parts sent through Player3D once more with every vertex
+// dropped along the sun at its own height. Whatever the body is doing --
+// leaning out of cover, reloading, mid-stride, going down -- the shadow is
+// doing it too, because it is the same mesh on the same frame. The capsule
+// skeleton above remains for figures the model does not draw.
+//
+// Soft edges come from resolution, not blur: the silhouette is rendered small
+// and stretched back up, and bilinear filtering is the penumbra.
+const PLAYER3D_STAND_Z = 35.5;          // model units, feet to crown, standing
+const CEL_CAST_COLOR = [24 / 255, 24 / 255, 68 / 255];
+const CEL_CAST_TINT = [0.66, 0.68, 0.86];
+const _celCast = { matrix: new Float32Array(16), color: CEL_CAST_COLOR };
+const _celCastOpts = { cast: _celCast, view: false, outline: false, resolutionScale: 0.5,
+  includeParts: undefined, excludeParts: undefined };
+const _celTint = [1, 1, 1];
+function _celCastAffine(m, fn) {
+  // Build a 4x4 from an affine map of (x, y, z) by probing its basis.
+  fn(0, 0, 0); const ox = _cfsP.x, oy = _cfsP.y;
+  fn(1, 0, 0); const ax = _cfsP.x - ox, ay = _cfsP.y - oy;
+  fn(0, 1, 0); const bx = _cfsP.x - ox, by = _cfsP.y - oy;
+  fn(0, 0, 1); const cx = _cfsP.x - ox, cy = _cfsP.y - oy;
+  m[0] = ax; m[1] = ay; m[2] = 0; m[3] = 0;  m[4] = bx; m[5] = by; m[6] = 0; m[7] = 0;
+  m[8] = cx; m[9] = cy; m[10] = 1; m[11] = 0; m[12] = ox; m[13] = oy; m[14] = 0; m[15] = 1;
+}
+function celFigureCast3D(actor, snapshot, ctx, options) {
+  if (!celCityScene() || actor.isCorpse || typeof ctx.getTransform !== 'function') return null;
+  const day = Math.min(1, shadowDensity() * 3.2);
+  if (!(day > 0.01)) return null;
+  const shade = celFigureShade(actor);
+  const A = celShadowAlpha() * (1 - shade.feet);
+  const k = shadowLengthScale() * CEL_SHADOW_REACH;
+  if (A > 0.01) {
+    // The sun's ground throw, brought into whatever frame the actor is being
+    // drawn in (it may be scaled, and some pose paths arrive rotated).
+    const T = ctx.getTransform(), det = T.a * T.d - T.b * T.c;
+    const sW = zoom * (typeof pixelDensity === 'function' ? pixelDensity() : 1);
+    if (Math.abs(det) > 1e-9 && sW > 0) {
+      const zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
+      const wx = LIGHT_DX * k * zs * sW, wy = LIGHT_DY * k * zs * sW;
+      const vx = (T.d * wx - T.c * wy) / det, vy = (-T.b * wx + T.a * wy) / det;
+      const m = _celCast.matrix;
+      m[0] = 1; m[1] = 0; m[2] = 0; m[3] = 0; m[4] = 0; m[5] = 1; m[6] = 0; m[7] = 0;
+      m[8] = vx; m[9] = vy; m[10] = 1; m[11] = 0; m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
+      _celCastOpts.includeParts = options.includeParts; _celCastOpts.excludeParts = options.excludeParts;
+      _celCastOpts.resolutionScale = 0.4;
+      const ga = ctx.globalAlpha;
+      ctx.globalAlpha = ga * A;
+      try { Player3D.draw(snapshot, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; }
+      if (_depthOn) celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
+    }
+  }
+  const s = shade.body * day;
+  if (!(s > 0.01)) return null;
+  _celTint[0] = 1 + (CEL_CAST_TINT[0] - 1) * s; _celTint[1] = 1 + (CEL_CAST_TINT[1] - 1) * s;
+  _celTint[2] = 1 + (CEL_CAST_TINT[2] - 1) * s;
+  return _celTint;
+}
+// True when the Blender model, not the capsule skeleton, will cast for this
+// figure on this frame.
+function celFigureModelCasts(c) {
+  if (typeof Player3D === 'undefined' || !Player3D || Player3D.enabled === false || Player3D.failure ||
+      !Player3D.ready || (typeof boxingActive === 'function' && boxingActive(c)) || c.skeletonTimer > 0) return false;
+  if (c.isPlayer) return true;
+  return typeof enemy3DLivingEligible === 'function' && enemy3DLivingEligible(c);
+}
+
 // Wall halves waiting for their building to be drawn.
 const _cfsJobs = [];
 let _cfsJobN = 0;
 const _cfsWallLean = [0, 0];
-function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k) {
+function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k, model) {
   let job = _cfsJobs[_cfsJobN];
   if (!job) job = _cfsJobs[_cfsJobN] = { caps: new Float32Array(8 * 28), quad: new Float32Array(8) };
   _cfsJobN++;
-  job.caps.set(_cfsCaps); job.n = n; job.ox = ox; job.oy = oy; job.A = A; job.k = k;
+  job.model = model || null;
+  if (!model) job.caps.set(_cfsCaps);
+  job.n = n; job.ox = ox; job.oy = oy; job.A = A; job.k = k;
   job.wall = wall; job.plane = plane; job.ux = LIGHT_DX; job.uy = LIGHT_DY;
   job.ex = _cfsWallLean[0]; job.ey = _cfsWallLean[1];
   job.key = b._depthKey === undefined ? Infinity : b._depthKey;
   for (let i = 0; i < 8; i++) job.quad[i] = q[i];
 }
 const _cfsQuad = new Float32Array(8);
-function celFigureWalls(c, n, A, k) {
+function celFigureWalls(c, n, A, k, model) {
   if (typeof colNear !== 'function' || _cfsJobN >= 24) return;
   const reach = CEL_FIGURE_H * 1.25 * k + 16;
   const ux = LIGHT_DX, uy = LIGHT_DY;
@@ -53082,7 +53240,7 @@ function celFigureWalls(c, n, A, k) {
       let seen = false;                        // both cell lists can hold it
       for (let j = first; j < _cfsJobN; j++) if (_cfsJobs[j].b === b) { seen = true; break; }
       if (seen) continue;
-      _cfsWallJob(b, wall, plane, q, n, c.x, c.y, A, k);
+      _cfsWallJob(b, wall, plane, q, n, c.x, c.y, A, k, model);
       _cfsJobs[_cfsJobN - 1].b = b;
       _cfsJobs[_cfsJobN - 1].fine = !!c.isPlayer;
       if (_cfsJobN >= 24) return;
@@ -53105,7 +53263,24 @@ function celFigureWallFlush(depth) {
     ctx.closePath(); ctx.clip();
     P.wall = job.wall; P.plane = job.plane; P.ux = job.ux; P.uy = job.uy; P.k = job.k;
     P.ex = job.ex; P.ey = job.ey;
-    _cfsPaint(ctx, job.caps, job.n, job.ox, job.oy, job.A, job.fine);
+    if (job.model) {
+      // The same fold, as one matrix: model space -> the actor's frame at the
+      // time it was drawn -> the world -> up the wall. Heights convert from
+      // model units to the units the wall's lean is measured in.
+      const W = ctx.getTransform(), T = job.model.T, det = W.a * W.d - W.b * W.c;
+      if (Math.abs(det) > 1e-9) {
+        const ra = (W.d * T.a - W.c * T.b) / det, rb = (-W.b * T.a + W.a * T.b) / det;
+        const rc = (W.d * T.c - W.c * T.d) / det, rd = (-W.b * T.c + W.a * T.d) / det;
+        const re = (W.d * (T.e - W.e) - W.c * (T.f - W.f)) / det, rf = (-W.b * (T.e - W.e) + W.a * (T.f - W.f)) / det;
+        const zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
+        _celCastAffine(_celCast.matrix, (x, y, z) => _cfsProj(ra * x + rc * y + re, rb * x + rd * y + rf, z * zs));
+        _celCastOpts.includeParts = job.model.include; _celCastOpts.excludeParts = job.model.exclude;
+        _celCastOpts.resolutionScale = 0.5;
+        ctx.globalAlpha = job.A;
+        Player3D.draw(job.model.snapshot, ctx, _celCastOpts);
+      }
+      job.model = null;
+    } else _cfsPaint(ctx, job.caps, job.n, job.ox, job.oy, job.A, job.fine);
     P.wall = 0;
     ctx.restore();
     job.b = null;
@@ -53117,9 +53292,9 @@ function celFigureShadow(c, pose, fall) {
       c.eType === 'ARMORED' || typeof drawingContext === 'undefined') return false;
   const ctx = drawingContext;
   if (!ctx || typeof ctx.arc !== 'function') return false;
-  const SD = shadowDensity();
-  const A = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
-  if (A <= 0.004) return true;                 // night: the lamps own it
+  if (celFigureModelCasts(c)) return true;     // the model casts its own
+  const A = celShadowAlpha() * (1 - celFigureShade(c).feet);
+  if (A <= 0.004) return true;                 // night, or standing in shade
   const k = shadowLengthScale() * CEL_SHADOW_REACH;
   const n = celFigureSkeleton(c, pose || null, fall || 0);
   const P = _cfsP;
@@ -68682,13 +68857,14 @@ uniform vec2 uThresholds;
 uniform float uShadeContrast;
 uniform float uInk;
 uniform float uAlpha;
+uniform vec3 uTint;
 out vec4 oColor;
 void main() {
   float diffuse = dot(normalize(vNormal), uLight)*0.5+0.5;
   float shade = diffuse < uThresholds.x ? uBands.x :
     diffuse < uThresholds.y ? uBands.y : uBands.z;
   shade = mix(1.0, shade, uShadeContrast);
-  vec3 color = mix(uColor*shade, vec3(0.055,0.045,0.055), uInk);
+  vec3 color = mix(uColor*shade*uTint, vec3(0.055,0.045,0.055)*uTint, uInk);
   oColor = vec4(color, uAlpha);
 }`;
   const stats = { draws:0, meshUploads:0, triangles:0, gpuDrawCalls:0,
@@ -68720,6 +68896,8 @@ void main() {
       failed=false;failure='';invalidatePipeline();return true;
     },
     projectPoint(snapshot,point,out){return Player3DView.project(point,snapshot&&snapshot.renderView,out);},
+    // [minX,minY,minZ,maxX,maxY,maxZ] of a posed snapshot, in its own frame.
+    measureSnapshot(snapshot){return ensure()&&measure(snapshot,emptyOptions)?Array.from(bounds):null;},
     get canvas(){return canvas;}, get gl(){return gl;},
     get failure(){return failure;}, get ready(){return !!program&&!lost&&!failed;},
     getDiagnostics(){return {enabled:api.enabled,ready:api.ready,failure,generation,
@@ -68964,7 +69142,7 @@ void main() {
       gl.linkProgram(program);gl.deleteShader(vertex);gl.deleteShader(fragment);
       if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program)||'Player shader link failed');
       stats.programCreates++;uniforms={};
-      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha'])
+      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint'])
         uniforms[name]=gl.getUniformLocation(program,name);
       pipeline.stage='initialization';
       for(const name of Object.keys(asset.meshes)) {
@@ -69026,12 +69204,28 @@ void main() {
     return determinant;
   }
 
+  // A CAST draws the same posed parts through one extra affine: every vertex
+  // dropped along the sun to the ground, or folded up a wall. It is the actor's
+  // real geometry in its real pose, so the shadow cannot disagree with the
+  // figure. Painted as one flat colour; the caller owns alpha and softness.
+  const castScratch=new Float32Array(16);
+  function castMatrix(c,m) {
+    const o=castScratch;
+    for(let col=0;col<4;col++) {
+      const a=m[col*4],b=m[col*4+1],d=m[col*4+2],e=m[col*4+3];
+      o[col*4]=c[0]*a+c[4]*b+c[8]*d+c[12]*e;o[col*4+1]=c[1]*a+c[5]*b+c[9]*d+c[13]*e;
+      o[col*4+2]=c[2]*a+c[6]*b+c[10]*d+c[14]*e;o[col*4+3]=e;
+    }
+    return o;
+  }
   function measure(snapshot,options) {
     bounds[0]=bounds[1]=bounds[2]=Infinity;bounds[3]=bounds[4]=bounds[5]=-Infinity;
     let count=0;
+    const cast=options.cast;
     for(const part of snapshot.parts) {
-      const mesh=meshes[part.mesh],m=part.matrix;
-      if(!mesh||!selected(part,options)||!validMatrix(m)) continue;
+      const mesh=meshes[part.mesh];
+      if(!mesh||!selected(part,options)||!validMatrix(part.matrix)) continue;
+      const m=cast?castMatrix(cast.matrix,part.matrix):part.matrix;
       const b=mesh.box;
       for(let corner=0;corner<8;corner++) {
         const x=b[corner&1?3:0],y=b[corner&2?4:1],z=b[corner&4?5:2];
@@ -69075,23 +69269,27 @@ void main() {
   }
 
   function pass(snapshot,options,ink,outline) {
+    const cast=ink===2?options.cast:null;
+    if(cast){ink=0;color[0]=cast.color[0];color[1]=cast.color[1];color[2]=cast.color[2];gl.uniform3fv(uniforms.uColor,color);}
     gl.uniform1f(uniforms.uInk,ink);gl.uniform1f(uniforms.uOutline,outline);
     gl.cullFace(ink?gl.FRONT:gl.BACK);gl.depthMask(!ink);
-    const markParts=!ink&&snapshot.stains&&snapshot.stains.length;
+    const markParts=!cast&&!ink&&snapshot.stains&&snapshot.stains.length;
     if(markParts){gl.enable(gl.STENCIL_TEST);gl.stencilMask(255);gl.stencilOp(gl.KEEP,gl.KEEP,gl.REPLACE);}
     else gl.disable(gl.STENCIL_TEST);
     for(let partIndex=0;partIndex<snapshot.parts.length;partIndex++) {
       const part=snapshot.parts[partIndex];
-      const mesh=meshes[part.mesh],matrix=part.matrix;
-      if(!mesh||!selected(part,options)||!validMatrix(matrix)) continue;
+      const mesh=meshes[part.mesh];
+      if(!mesh||!selected(part,options)||!validMatrix(part.matrix)) continue;
+      if(cast&&Number.isFinite(part.alpha)&&part.alpha<.5)continue;
+      const matrix=cast?castMatrix(cast.matrix,part.matrix):part.matrix;
       const determinant=normalMatrix(matrix);if(!determinant)continue;
       if(markParts)gl.stencilFunc(gl.ALWAYS,partIndex%254+1,255);
       // The overhead projection flips Y. Mirrored part transforms flip it back.
       gl.frontFace(determinant<0?gl.CCW:gl.CW);
       gl.uniformMatrix4fv(uniforms.uModel,false,matrix);gl.uniformMatrix3fv(uniforms.uNormal,false,normal);
-      gl.uniform1f(uniforms.uAlpha,Number.isFinite(part.alpha)?Math.max(0,Math.min(1,part.alpha)):1);
+      gl.uniform1f(uniforms.uAlpha,cast?1:Number.isFinite(part.alpha)?Math.max(0,Math.min(1,part.alpha)):1);
       gl.bindVertexArray(mesh.vao);
-      if(ink) {gl.drawElements(gl.TRIANGLES,mesh.count,mesh.type,0);stats.gpuDrawCalls++;}
+      if(ink||cast) {gl.drawElements(gl.TRIANGLES,mesh.count,mesh.type,0);stats.gpuDrawCalls++;}
       else for(const group of mesh.groups) {
         groupColor(part,mesh,group);
         gl.drawElements(gl.TRIANGLES,group.count,mesh.type,group.start*mesh.bytes);stats.gpuDrawCalls++;
@@ -69195,9 +69393,34 @@ void main() {
       gl.uniform4f(uniforms.uBounds,x,y,1/w,1/h);
       gl.uniform2f(uniforms.uDepth,minZ,1/Math.max(.1,maxZ-minZ));
       gl.uniform4f(uniforms.uView,view.offsetX,view.offsetY,view.invH,view.pivotZ);
+      const cast=options.cast||null,tint=options.tint;
+      gl.uniform3f(uniforms.uTint,tint&&!cast?tint[0]:1,tint&&!cast?tint[1]:1,tint&&!cast?tint[2]:1);
       const light=sampleLighting(snapshot,transform,options.lighting);
       gl.uniform3fv(uniforms.uLight,light.direction);
-      gl.uniform1f(uniforms.uShadeContrast,light.contrast);
+      gl.uniform1f(uniforms.uShadeContrast,cast?0:light.contrast);
+      if(cast) {
+        pass(snapshot,options,2,0);gl.bindVertexArray(null);gl.depthMask(true);
+        if(pipeline.validation==='failed')return false;
+        // The stretch IS the penumbra, so it must be filtered whatever the
+        // sketch has set for sprites.
+        const smoothing=context.imageSmoothingEnabled,quality=context.imageSmoothingQuality;
+        context.imageSmoothingEnabled=true;context.imageSmoothingQuality='high';
+        // Four taps a texel apart, each at a quarter of the tone. The model is
+        // rasterised without multisampling, so one stretched copy keeps its
+        // stair-steps; four offset copies average them into a gradient, and
+        // composite back to exactly the caller's alpha where they overlap.
+        const full=context.globalAlpha,tap=1-Math.pow(1-Math.min(.98,full),.25);
+        const ox=w/pixelW*.85,oy=h/pixelH*.85;
+        context.globalAlpha=tap;
+        context.drawImage(canvas,0,0,pixelW,pixelH,x-ox,y-oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x+ox,y-oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x-ox,y+oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x+ox,y+oy,w,h);
+        context.globalAlpha=full;
+        context.imageSmoothingEnabled=smoothing;if(quality)context.imageSmoothingQuality=quality;
+        stats.castDraws=(stats.castDraws||0)+1;
+        return true;
+      }
       const toon=source.toon||emptyOptions,bands=toon.bands||defaultBands,thresholds=toon.thresholds||defaultThresholds;
       gl.uniform3f(uniforms.uBands,bands[0],bands[1],bands[2]);
       gl.uniform2f(uniforms.uThresholds,thresholds[0],thresholds[1]);

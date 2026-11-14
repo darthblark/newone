@@ -28,23 +28,26 @@ Morning light across a courtyard district:
 - **One sun caster.** In Level 1 the 2D pass owns sun shadows even when the
   WebGL light rig is running (`celCityScene()`, `uSunCast`). The rig skips its
   shadow ray march there and keeps relief shading, specular and lamp shadows.
-- **Figure shadows.** `celFigureShadow()` replaces the contact oval under
-  humanoids with a cast shadow built from the pose
+- **Figure shadows.** Humanoids cast a shadow of their actual pose
   ([preview](previews/level1-figure-shadows.png)):
-  - `celFigureSkeleton()` is one set of capsules blended between standing,
-    crouched and lying, so crouch, prone, cover and knockdown morph the same
-    shadow instead of swapping to a different one. The stance and stun draw
-    paths call it too.
-  - Each part is dropped along the sun at its own height. A carried long gun
-    lies across the chest and turns to the aim with the presentation spring.
-  - Edges are soft: the shape is filled in layers whose radii grow with the
-    part's height, so boots stay firm and the head dissolves. The player gets
-    four layers, other figures two.
-  - Where the shadow reaches a visible wall face it folds up the face along
-    the building's own lean (`celFigureWalls`, `celFigureWallFlush`), clipped
-    to that face and painted after the building is drawn.
-  - Cost in software-rasterised Chromium: about 4.3 ms for sixty non-player
-    figures, against 0.5 ms for sixty ovals. Not measured on a phone.
+  - Where the Blender model draws the figure, `celFigureCast3D()` sends the
+    same posed snapshot through `Player3D.draw()` once more with a `cast`
+    matrix that drops every vertex along the sun at its own height. The shadow
+    is the model, so cover, reloads, strides and falls match by construction.
+  - It is rendered at 0.4 resolution and blitted as four offset taps, which
+    is the soft edge. No Canvas blur filter is used.
+  - Where the shadow reaches a visible wall face, a second cast with a fold
+    matrix paints it up that face, clipped to the face and flushed after the
+    building is drawn (`celFigureWalls`, `celFigureWallFlush`).
+  - Figures the model does not draw (prone or stunned enemies, civilians)
+    fall back to `celFigureSkeleton()`, a capsule set blended across
+    standing, crouch, prone and knockdown, with layered soft fills.
+- **Building shadows shade figures.** `celFigureShade()` tests the sun ray
+  from a figure against nearby building footprints and heights. In shade the
+  model is tinted through a `uTint` uniform and its own cast shadow fades
+  out ([preview](previews/level1-figure-shade.png)). Five samples with a
+  short ramp make the edge a fade. Canvas-painted figures and held-weapon
+  overlays are not tinted.
 - **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
   material colours are saturated once per building plan (`vivid`).
 
