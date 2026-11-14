@@ -29,11 +29,22 @@ Morning light across a courtyard district:
   WebGL light rig is running (`celCityScene()`, `uSunCast`). The rig skips its
   shadow ray march there and keeps relief shading, specular and lamp shadows.
 - **Figure shadows.** `celFigureShadow()` replaces the contact oval under
-  humanoids with a person-shaped cast shadow: feet, hips, shoulders and head
-  are each dropped along the sun at their own height, so it stays welded to
-  the boots, swings through the day, scissors with the stride and lays a
-  raised weapon's barrel out on the road. One path and one fill per figure.
-  See [previews/level1-figure-shadows.png](previews/level1-figure-shadows.png).
+  humanoids with a cast shadow built from the pose
+  ([preview](previews/level1-figure-shadows.png)):
+  - `celFigureSkeleton()` is one set of capsules blended between standing,
+    crouched and lying, so crouch, prone, cover and knockdown morph the same
+    shadow instead of swapping to a different one. The stance and stun draw
+    paths call it too.
+  - Each part is dropped along the sun at its own height. A carried long gun
+    lies across the chest and turns to the aim with the presentation spring.
+  - Edges are soft: the shape is filled in layers whose radii grow with the
+    part's height, so boots stay firm and the head dissolves. The player gets
+    four layers, other figures two.
+  - Where the shadow reaches a visible wall face it folds up the face along
+    the building's own lean (`celFigureWalls`, `celFigureWallFlush`), clipped
+    to that face and painted after the building is drawn.
+  - Cost in software-rasterised Chromium: about 4.3 ms for sixty non-player
+    figures, against 0.5 ms for sixty ovals. Not measured on a phone.
 - **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
   material colours are saturated once per building plan (`vivid`).
 

@@ -6346,12 +6346,14 @@ function drawDepthSorted() {
       const ad = actors[ai]._depthKey;
       const start = mi;
       while (mi < masses.length && masses[mi]._depthKey <= ad) mi++;
-      if (mi > start) drawMassRun(masses, start, mi);
+      if (mi > start) { drawMassRun(masses, start, mi); celFigureWallFlush(masses[mi - 1]._depthKey); }
       actors[ai].show();
       boxingFlushFigureOverlays(actors[ai]);
     }
     if (mi < masses.length) drawMassRun(masses, mi, masses.length);
+    celFigureWallFlush(Infinity);
   } finally {
+    _cfsJobN = 0;
     _boxingFigurePass = previousBoxingPass;
     actors.length = 0;
     _depthOn = false;
@@ -23281,7 +23283,8 @@ function stunFall(e) {
 function drawStunnedFigure(e) {
   if(e.stunPose&&e.stunPose.knockout&&saloonKnockoutContext(e.stunPose.knockout.context))return drawSaloonKnockoutFigure(e);
   const f=stunFall(e),p=e.stunPose,rg=p&&p.rag,rig=projectFallRig(e.bodyW,e.bodyH,f);
-  if (!charShadowOwned(e.eType)) {charShadowFill(55);ellipse(charShadowX(12*(1-f)),charShadowY(12*(1-f)),20+f*24,21+f*12);}
+  if (celFigureShadow(e,null,Math.max(.001,f))) {}
+  else if (!charShadowOwned(e.eType)) {charShadowFill(55);ellipse(charShadowX(12*(1-f)),charShadowY(12*(1-f)),20+f*24,21+f*12);}
   if(e.isPlayer&&player3DDrawActor(e,window,{mode:'STUN',fall:f}))return;
   push();rotate(p?figureFallYaw(p,rg,f):e.aimAngle);scale(RAG_SCALE);
   const skin=e.skinCol||color(235,180,140),boot=color(red(e.pantsCol)*.55,green(e.pantsCol)*.55,blue(e.pantsCol)*.55);
@@ -28150,8 +28153,8 @@ if(this.stunTimer>0&&this.skeletonTimer<=0){drawStunnedFigure(this);pop();return
     // second shadow sitting under the real one -- which is what made a lit
     // scene look like it had two suns in it. Airborne units are the exception,
     // see CHAR_AIRBORNE.
-    if (stancePose.crouch > 0) drawCombatStanceShadow(this, stancePose);
-    else if (celFigureShadow(this)) {}
+    if (celFigureShadow(this, stancePose)) {}
+    else if (stancePose.crouch > 0) drawCombatStanceShadow(this, stancePose);
     else if (!charShadowOwned(this.eType)) {
     charShadowFill(sAlp);
     if (this.eType === "SAUCER" || this.eType === "SAUCER_RED") { ellipse(charShadowX(sOff * 2), charShadowY(sOff * 2), 80, 80); }
@@ -51644,6 +51647,7 @@ function drawCombatStanceUI(c, p) {
   pop();
 }
 function drawCombatStanceShadow(c, p) {
+  if(celFigureShadow(c,p))return;
   if(c.legInjury){drawLegInjuryShadow(c,stanceBodyPose(c));return;}
   const prone = p.prone || 0, low = p.crouch || 0;
   push(); rotate(stanceFacingAngle(c)); noStroke();
@@ -52828,47 +52832,287 @@ function charShadowOwned(eT) {
 // A FIGURE CASTS A FIGURE.
 //
 // The contact oval says "something is here" and nothing about what. In Stick
-// City every building now throws its own profile, so a person standing in the
-// same street with a grey disc under them reads as a token on a board. This is
-// the same construction CityBuildings3D.drawShadow() uses, applied to a body:
-// each part is dropped to the ground along the sun AT ITS OWN HEIGHT. Feet stay
-// under the feet, hips land part-way out, shoulders further, the head last --
-// so the shadow is a person lying on the pavement, welded to the boots, and it
-// swings round them through the day with every other shadow in the scene.
+// City every building throws its own profile, so a person standing in the same
+// street with a grey disc under them reads as a token on a board. This is the
+// construction CityBuildings3D.drawShadow() uses, applied to a body: each part
+// is dropped to the ground along the sun AT ITS OWN HEIGHT. Feet stay under the
+// feet, hips land part-way out, shoulders further, the head last.
 //
-// Because the parts keep their real horizontal offsets, the shadow answers the
-// pose for free: it is broad when the shoulders are square to the sun and
-// narrow side-on, the legs scissor with the stride, the arms swing against
-// them, and a raised weapon lays its barrel out across the road and sweeps as
-// the player aims. A shadow that MOVES with the figure is most of what plants
-// the figure on the ground.
+// Four things have to be true for that to read as a shadow rather than as a
+// decal, and each one is a separate piece of this block:
 //
-// One path, one fill: every piece is wound the same way so the nonzero rule
-// unions them and no overlap is darkened twice. No allocation, no cache, a
-// dozen short subpaths per figure. Humanoids only -- the vehicles, beasts and
-// aircraft keep the shapes that were drawn for them.
+//   * ONE SKELETON FOR EVERY POSE. celFigureSkeleton() is a handful of
+//     capsules blended between standing, crouched and lying, in the body's own
+//     facing. Crouching, going prone, taking cover and being knocked down are
+//     weights on the same joints, so the shadow MORPHS between them. It used
+//     to be owned by the standing branch alone, and every other pose branch
+//     drew its own oval -- so stepping up to cover swapped one shadow for a
+//     different one on a single frame, which read as it flashing off.
+//   * A PENUMBRA THAT GROWS WITH HEIGHT. A real shadow is sharp where the
+//     caster touches the ground and soft where it is far from it. Canvas blur
+//     is the one thing here a phone cannot afford per figure, so the shape is
+//     filled four times with every radius grown by an amount proportional to
+//     that part's height: the boots keep a firm edge and the head dissolves.
+//   * IT CLIMBS WALLS. A shadow that reaches a wall does not carry on along
+//     the ground underneath the building; it turns up the face. For one wall
+//     that turn is an AFFINE map of (position, height), so straight limbs stay
+//     straight and nothing needs subdividing: find where each part's sun ray
+//     meets the wall plane, take what height it still has there, and place it
+//     that far up the face along the same massLean() the wall is drawn with.
+//     The result is clipped to the face's own quad and painted once the
+//     building has been drawn, since the building sorts after the figure.
+//   * ONE PATH PER LAYER. Every piece is wound the same way, so the nonzero
+//     rule unions them and no overlap inside a layer is darkened twice.
+//
+// Nothing here advances a clock or writes to the figure; it reads the pose the
+// simulation already holds. Humanoids only -- the vehicles, beasts and aircraft
+// keep the shapes that were drawn for them.
 const CEL_FIGURE_H = 21;          // standing height, in the units masses use
-const _cfs = { ctx: null };
+const CEL_FIGURE_SOFT = [-1, -0.33, 0.33, 1];
+const _cfsCaps = new Float32Array(8 * 28);
+let _cfsN = 0;
+// Projection state for the pass being painted. Ground: p = b + L*z. Wall: see
+// _cfsProj().
+const _cfsP = { wall: 0, lx: 0, ly: 0, ux: 0, uy: 0, k: 1, plane: 0, ex: 0, ey: 0, x: 0, y: 0 };
+function _cfsCap(ax, ay, az, bx, by, bz, ra, rb) {
+  if (_cfsN >= 28) return;
+  const o = _cfsN++ * 8, q = _cfsCaps;
+  q[o] = ax; q[o + 1] = ay; q[o + 2] = az; q[o + 3] = bx; q[o + 4] = by; q[o + 5] = bz;
+  q[o + 6] = ra; q[o + 7] = rb;
+}
+function _cfsProj(x, y, z) {
+  const P = _cfsP;
+  if (!P.wall) { P.x = x + P.lx * z; P.y = y + P.ly * z; return; }
+  // wall 1: a face on the line y = plane. wall 2: a face on the line x = plane.
+  // d is how far along the ground the sun ray travels before it meets the
+  // face; whatever height the ray still has there is how far up it lands.
+  if (P.wall === 1) {
+    const d = (P.plane - y) / P.uy, h = z - d / P.k;
+    P.x = x + P.ux * d + P.ex * h; P.y = P.plane + P.ey * h;
+  } else {
+    const d = (P.plane - x) / P.ux, h = z - d / P.k;
+    P.x = P.plane + P.ex * h; P.y = y + P.uy * d + P.ey * h;
+  }
+}
 function _cfsPoly(ctx, x0, y0, x1, y1, x2, y2, x3, y3) {
-  // Same sense as Canvas ellipse(), whatever order the corners arrived in.
+  // Same sense as Canvas arc(), whatever order the corners arrived in.
   const a = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
   ctx.moveTo(x0, y0);
   if (a >= 0) { ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); }
   else        { ctx.lineTo(x3, y3); ctx.lineTo(x2, y2); ctx.lineTo(x1, y1); }
   ctx.closePath();
 }
-// A limb: a tapered bar from (ax,ay) to (bx,by) with rounded ends.
-function _cfsLimb(ctx, ax, ay, bx, by, ra, rb) {
-  const dx = bx - ax, dy = by - ay, m = Math.sqrt(dx * dx + dy * dy);
-  if (m > 0.5) {
-    const px = -dy / m, py = dx / m;
-    _cfsPoly(ctx, ax + px * ra, ay + py * ra, bx + px * rb, by + py * rb,
-                  bx - px * rb, by - py * rb, ax - px * ra, ay - py * ra);
+// One layer of the silhouette: every capsule, grown by `soft` penumbra widths.
+function _cfsLayer(ctx, caps, n, ox, oy, soft) {
+  const P = _cfsP;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const o = i * 8;
+    const za = caps[o + 2], zb = caps[o + 5];
+    const ra = caps[o + 6] + soft * (0.45 + 3.6 * za / CEL_FIGURE_H);
+    const rb = caps[o + 7] + soft * (0.45 + 3.6 * zb / CEL_FIGURE_H);
+    if (ra < 0.3 && rb < 0.3) continue;      // too fine to have an umbra
+    const r0 = ra < 0.3 ? 0.3 : ra, r1 = rb < 0.3 ? 0.3 : rb;
+    _cfsProj(ox + caps[o], oy + caps[o + 1], za);
+    const ax = P.x, ay = P.y;
+    _cfsProj(ox + caps[o + 3], oy + caps[o + 4], zb);
+    const bx = P.x, by = P.y;
+    const dx = bx - ax, dy = by - ay, m = Math.sqrt(dx * dx + dy * dy);
+    if (m > 0.5) {
+      const px = -dy / m, py = dx / m;
+      _cfsPoly(ctx, ax + px * r0, ay + py * r0, bx + px * r1, by + py * r1,
+                    bx - px * r1, by - py * r1, ax - px * r0, ay - py * r0);
+    }
+    ctx.moveTo(ax + r0, ay); ctx.arc(ax, ay, r0, 0, 6.2832);
+    ctx.moveTo(bx + r1, by); ctx.arc(bx, by, r1, 0, 6.2832);
   }
-  ctx.moveTo(ax + ra, ay); ctx.arc(ax, ay, ra, 0, 6.2832);
-  ctx.moveTo(bx + rb, by); ctx.arc(bx, by, rb, 0, 6.2832);
+  ctx.fill();
 }
-function celFigureShadow(c) {
+// The player gets four penumbra layers; everyone else gets two. A crowd is
+// where the fill count matters, and at the size a bystander is drawn two steps
+// of edge are as soft as four. Either way the layers composite to exactly A
+// where they all overlap.
+const CEL_FIGURE_SOFT2 = [-0.6, 0.7];
+function _cfsPaint(ctx, caps, n, ox, oy, A, fine) {
+  const L = fine ? CEL_FIGURE_SOFT : CEL_FIGURE_SOFT2;
+  const a = 1 - Math.pow(1 - A, 1 / L.length);
+  ctx.fillStyle = 'rgba(24,24,68,' + a.toFixed(4) + ')';
+  for (let j = 0; j < L.length; j++) _cfsLayer(ctx, caps, n, ox, oy, L[j]);
+}
+// The pose, as capsules in the figure's own ground frame (world axes, origin at
+// the feet). `fall` is 0..1 for a body going down.
+function celFigureSkeleton(c, pose, fall) {
+  _cfsN = 0;
+  const H = CEL_FIGURE_H * Math.max(0.75, (c.bodyH || 27) / 27);
+  let wP = pose ? pose.prone || 0 : 0, wC = pose ? pose.crouch || 0 : 0;
+  const posed = wP > 0 || wC > 0 || (typeof coverRenderActive === 'function' && coverRenderActive(c));
+  let fa = posed && typeof stanceFacingAngle === 'function' ? stanceFacingAngle(c)
+         : Number.isFinite(c.aimAngle) ? c.aimAngle : 0;
+  const down = fall > 0;
+  if (down) {
+    const sp = c.stunPose;
+    if (sp && typeof figureFallYaw === 'function') { const y = figureFallYaw(sp, sp.rag, fall); if (Number.isFinite(y)) fa = y; }
+    wC *= 1 - fall; wP = Math.max(wP, fall);
+  }
+  if (wP > 1) wP = 1;
+  if (wC > 1 - wP) wC = 1 - wP;
+  const wS = 1 - wP - wC, up = wS + wC;       // weight of being on your feet
+  const fx = Math.cos(fa), fy = Math.sin(fa), sx = -fy, sy = fx;
+  const hw = (c.bodyH || 27) * 0.40;
+  // Joint: (forward, side, height) in each of the three poses, blended.
+  let jx = 0, jy = 0, jz = 0;
+  const J = (fS, sS, zS, fC, sC, zC, fP, sP, zP) => {
+    const f = fS * wS + fC * wC + fP * wP, sd = sS * wS + sC * wC + sP * wP;
+    jx = fx * f + sx * sd; jy = fy * f + sy * sd; jz = zS * wS + zC * wC + zP * wP;
+  };
+  // The stride runs along the line of travel, which is not always the facing.
+  const moving = c.isMoving && !down;
+  const ma = moving && Number.isFinite(c.moveAngle) ? c.moveAngle : fa;
+  const g = moving ? Math.max(0.35, Math.min(1, c.gait === undefined ? 0.6 : c.gait + 0.25)) : 0;
+  const st = g * Math.sin(c.walkCycle || 0) * 6.5 * (wS + wC * 0.5);
+  const mx = Math.cos(ma) * st, my = Math.sin(ma) * st;
+  let hcx = 0, hcy = 0, hcz = 0, scx = 0, scy = 0, scz = 0;
+  for (let i = -1; i <= 1; i += 2) {
+    J(0, 4.2 * i, 0,  -2, 5 * i, 0,  -25, 4 * i, 1);
+    const ftx = jx + mx * i, fty = jy + my * i, ftz = jz;
+    J(1.5, 3.9 * i, H * 0.26,  9, 5.5 * i, H * 0.27,  -16, 4 * i, 2);
+    const knx = jx + mx * i * 0.4, kny = jy + my * i * 0.4, knz = jz;
+    J(0, 3.4 * i, H * 0.50,  -4, 3.6 * i, H * 0.28,  -8, 3.6 * i, 2.6);
+    _cfsCap(ftx, fty, ftz, knx, kny, knz, 3.1, 3.5);
+    _cfsCap(knx, kny, knz, jx, jy, jz, 3.5, 3.8);
+    hcx += jx * 0.5; hcy += jy * 0.5; hcz += jz * 0.5;
+  }
+  // Torso: a spine wide enough to fill the chest, capped by the shoulder line.
+  J(0, hw, H * 0.84,  3, hw, H * 0.60,  9, hw, 3.6);
+  const slx = jx, sly = jy, slz = jz;
+  J(0, -hw, H * 0.84,  3, -hw, H * 0.60,  9, -hw, 3.6);
+  const srx = jx, sry = jy, srz = jz;
+  scx = (slx + srx) * 0.5; scy = (sly + sry) * 0.5; scz = (slz + srz) * 0.5;
+  _cfsCap(hcx, hcy, hcz, scx, scy, scz, 6.2, 8.4);
+  _cfsCap(slx, sly, slz, srx, sry, srz, 3.7, 3.7);
+  J(1.5, 0, H * 0.98,  6, 0, H * 0.72,  18, 0, 4.6);
+  _cfsCap(jx, jy, jz, jx, jy, jz, 6.4, 6.4);
+  // Arms, and whatever is in them. The standing targets are placed relative to
+  // the blended shoulder, so a crouch carries them down with it.
+  const w = c.isArmed && !down ? c.currentWeapon : null;
+  const two = !!w && typeof weaponHands === 'function' && weaponHands(w) === 2;
+  let t = w ? 1 : 0;                          // 0 carried, 1 presented
+  if (w && c.isPlayer && typeof standingWeaponPresentation === 'function') {
+    t = standingWeaponPresentation(c); t = t < 0 ? 0 : t > 1 ? 1 : t || 0;
+  }
+  const swing = c.meleeTimer > 0 && !down ? 1 : 0;
+  const zc = scz - H * 0.10 * up, len = two ? 30 : 15;
+  // Hand i (+1 strong side, -1 off side): carried, presented, lying.
+  const hand = (i) => {
+    const cf = two ? (i > 0 ? 5 : 8) : -st * i * 0.8, cs = two ? hw * (i > 0 ? 0.6 : -0.7) : (hw + 1.5) * i;
+    const cz = two ? zc - H * 0.06 : scz * 0.60;
+    let pf = cf, ps = cs, pz = cz;
+    if (w && (i > 0 || two)) { pf = i > 0 ? 10 : 18; ps = i > 0 ? 3 : -1; pz = zc; }
+    if (swing && i > 0) { pf = 19; ps = 2; pz = zc; }
+    const k = swing && i > 0 ? 1 : t;
+    const f = cf + (pf - cf) * k, sd = cs + (ps - cs) * k, z = cz + (pz - cz) * k;
+    const lf = down ? 5 : 22, ls = down ? (hw + 10) * i : 4 * i, lz = 2.4;
+    const F = f * up + lf * wP, S = sd * up + ls * wP;
+    jx = fx * F + sx * S; jy = fy * F + sy * S; jz = z * up + lz * wP;
+  };
+  hand(1);  _cfsCap(slx, sly, slz, jx, jy, jz, 3.0, 2.6);
+  hand(-1); _cfsCap(srx, sry, srz, jx, jy, jz, 3.0, 2.6);
+  if (w) {
+    // Carried, a long gun lies across the chest; presented, any gun points
+    // where the figure is looking. One bar, turned from one to the other.
+    const c0f = two ? 4 : 2, c0s = two ? hw * 0.9 : hw + 2, c1f = two ? 9 : 2 + len * 0.55, c1s = two ? -(hw + 9) : hw + 3;
+    const cz0 = two ? zc - H * 0.08 : scz * 0.58, cz1 = two ? zc : scz * 0.44;
+    const a0f = c0f + (8 - c0f) * t, a0s = c0s + (2 - c0s) * t, a1f = c1f + (8 + len - c1f) * t, a1s = c1s + (2 - c1s) * t;
+    const z0 = cz0 + (zc - cz0) * t, z1 = cz1 + (zc - cz1) * t;
+    const F0 = a0f * up + 20 * wP, S0 = a0s * up + 2 * wP, F1 = a1f * up + (20 + len) * wP, S1 = a1s * up + 2 * wP;
+    _cfsCap(fx * F0 + sx * S0, fy * F0 + sy * S0, z0 * up + 3 * wP,
+            fx * F1 + sx * S1, fy * F1 + sy * S1, z1 * up + 3 * wP, 1.9, 1.5);
+  }
+  return _cfsN;
+}
+// Wall halves waiting for their building to be drawn.
+const _cfsJobs = [];
+let _cfsJobN = 0;
+const _cfsWallLean = [0, 0];
+function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k) {
+  let job = _cfsJobs[_cfsJobN];
+  if (!job) job = _cfsJobs[_cfsJobN] = { caps: new Float32Array(8 * 28), quad: new Float32Array(8) };
+  _cfsJobN++;
+  job.caps.set(_cfsCaps); job.n = n; job.ox = ox; job.oy = oy; job.A = A; job.k = k;
+  job.wall = wall; job.plane = plane; job.ux = LIGHT_DX; job.uy = LIGHT_DY;
+  job.ex = _cfsWallLean[0]; job.ey = _cfsWallLean[1];
+  job.key = b._depthKey === undefined ? Infinity : b._depthKey;
+  for (let i = 0; i < 8; i++) job.quad[i] = q[i];
+}
+const _cfsQuad = new Float32Array(8);
+function celFigureWalls(c, n, A, k) {
+  if (typeof colNear !== 'function' || _cfsJobN >= 24) return;
+  const reach = CEL_FIGURE_H * 1.25 * k + 16;
+  const ux = LIGHT_DX, uy = LIGHT_DY;
+  const first = _cfsJobN;
+  for (let pass = 0; pass < 2; pass++) {
+    const list = pass ? colNear(c.x + ux * reach, c.y + uy * reach) : colNear(c.x, c.y);
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!b.isBlockBuilding || b.isBiomeProp || !(b.w > 0) || !(b.h > 0)) continue;
+      const rise = buildingRise(b);
+      if (!(rise > 2)) continue;
+      const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2, y0 = b.y - b.h / 2, y1 = b.y + b.h / 2;
+      massLean(b.x, b.y, rise, _cfsWallLean);
+      const lx = _cfsWallLean[0], ly = _cfsWallLean[1];
+      _cfsWallLean[0] = lx / rise; _cfsWallLean[1] = ly / rise;
+      const q = _cfsQuad;
+      // The face the sun is behind us on, if the lean is showing it.
+      let wall = 0, plane = 0;
+      if (uy > 0.12 && ly > 0.5 && c.y < y0 + 1 && y0 - c.y < uy * reach) {
+        const hit = c.x + ux * (y0 - c.y) / uy;
+        if (hit > x0 - 30 && hit < x1 + 30) {
+          wall = 1; plane = y0;
+          q[0] = x0; q[1] = y0; q[2] = x1; q[3] = y0; q[4] = x1 + lx; q[5] = y0 + ly; q[6] = x0 + lx; q[7] = y0 + ly;
+        }
+      }
+      if (!wall && Math.abs(ux) > 0.12 && c.y > y0 - 30 && c.y < y1 + 30) {
+        const px = ux > 0 ? x0 : x1;
+        if ((ux > 0 ? lx > 0.5 && c.x < px + 1 : lx < -0.5 && c.x > px - 1) && Math.abs(px - c.x) < Math.abs(ux) * reach) {
+          wall = 2; plane = px;
+          q[0] = px; q[1] = y0; q[2] = px; q[3] = y1; q[4] = px + lx; q[5] = y1 + ly; q[6] = px + lx; q[7] = y0 + ly;
+        }
+      }
+      if (!wall) continue;
+      let seen = false;                        // both cell lists can hold it
+      for (let j = first; j < _cfsJobN; j++) if (_cfsJobs[j].b === b) { seen = true; break; }
+      if (seen) continue;
+      _cfsWallJob(b, wall, plane, q, n, c.x, c.y, A, k);
+      _cfsJobs[_cfsJobN - 1].b = b;
+      _cfsJobs[_cfsJobN - 1].fine = !!c.isPlayer;
+      if (_cfsJobN >= 24) return;
+    }
+  }
+}
+// Called by drawDepthSorted() after each run of masses with the depth it has
+// reached, and once more at the end with Infinity.
+function celFigureWallFlush(depth) {
+  if (!_cfsJobN) return;
+  const ctx = drawingContext, P = _cfsP;
+  let keep = 0;
+  for (let i = 0; i < _cfsJobN; i++) {
+    const job = _cfsJobs[i];
+    if (job.key > depth) { const t = _cfsJobs[keep]; _cfsJobs[keep] = job; _cfsJobs[i] = t; keep++; continue; }
+    const q = job.quad;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(q[0], q[1]); ctx.lineTo(q[2], q[3]); ctx.lineTo(q[4], q[5]); ctx.lineTo(q[6], q[7]);
+    ctx.closePath(); ctx.clip();
+    P.wall = job.wall; P.plane = job.plane; P.ux = job.ux; P.uy = job.uy; P.k = job.k;
+    P.ex = job.ex; P.ey = job.ey;
+    _cfsPaint(ctx, job.caps, job.n, job.ox, job.oy, job.A, job.fine);
+    P.wall = 0;
+    ctx.restore();
+    job.b = null;
+  }
+  _cfsJobN = keep;
+}
+function celFigureShadow(c, pose, fall) {
   if (!celCityScene() || CHAR_AIRBORNE[c.eType] || !ragHumanoid(c.eType) ||
       c.eType === 'ARMORED' || typeof drawingContext === 'undefined') return false;
   const ctx = drawingContext;
@@ -52877,59 +53121,11 @@ function celFigureShadow(c) {
   const A = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
   if (A <= 0.004) return true;                 // night: the lamps own it
   const k = shadowLengthScale() * CEL_SHADOW_REACH;
-  const lx = LIGHT_DX * k, ly = LIGHT_DY * k;  // ground throw per unit height
-  const H = CEL_FIGURE_H * Math.max(0.75, (c.bodyH || 27) / 27);
-  const fa = Number.isFinite(c.aimAngle) ? c.aimAngle : 0;
-  const ma = c.isMoving && Number.isFinite(c.moveAngle) ? c.moveAngle : fa;
-  const fx = Math.cos(fa), fy = Math.sin(fa), sx = -fy, sy = fx;
-  const mx = Math.cos(ma), my = Math.sin(ma), nx = -my, ny = mx;
-  const hw = (c.bodyH || 27) * 0.40;           // shoulder half-width
-  const g = c.isMoving ? Math.max(0.35, Math.min(1, c.gait === undefined ? 0.6 : c.gait + 0.25)) : 0;
-  const st = g * Math.sin(c.walkCycle || 0) * 6.5;
-  const hipZ = H * 0.50, shZ = H * 0.84, hdZ = H * 0.98;
-  const hipX = lx * hipZ, hipY = ly * hipZ, shX = lx * shZ, shY = ly * shZ;
-  ctx.fillStyle = 'rgba(24,24,68,' + A.toFixed(3) + ')';
-  ctx.beginPath();
-  // Legs, in the frame the feet travel in.
-  for (let i = -1; i <= 1; i += 2) {
-    const f = st * i;
-    _cfsLimb(ctx, nx * 4.2 * i + mx * f, ny * 4.2 * i + my * f,
-             hipX + nx * 3.4 * i, hipY + ny * 3.4 * i, 3.1, 3.7);
-  }
-  // Torso: hips to shoulders, as wide as the body is ACROSS the sun.
-  const lm = Math.sqrt(lx * lx + ly * ly) || 1, px = -ly / lm, py = lx / lm;
-  const across = Math.abs(sx * px + sy * py), along = Math.abs(fx * px + fy * py);
-  const shR = Math.sqrt(hw * hw * across * across + 36 * along * along);
-  const hpR = Math.sqrt(hw * hw * 0.42 * across * across + 25 * along * along);
-  _cfsPoly(ctx, hipX + px * hpR, hipY + py * hpR, shX + px * shR, shY + py * shR,
-                shX - px * shR, shY - py * shR, hipX - px * hpR, hipY - py * hpR);
-  ctx.moveTo(shX + sx * hw + 3.6, shY + sy * hw); ctx.arc(shX + sx * hw, shY + sy * hw, 3.6, 0, 6.2832);
-  ctx.moveTo(shX - sx * hw + 3.6, shY - sy * hw); ctx.arc(shX - sx * hw, shY - sy * hw, 3.6, 0, 6.2832);
-  _cfsLimb(ctx, shX + sx * hw, shY + sy * hw, shX - sx * hw, shY - sy * hw, 3.6, 3.6);
-  // Head.
-  const hx = lx * hdZ + fx * 1.5, hy = ly * hdZ + fy * 1.5;
-  ctx.moveTo(hx + 6.4, hy); ctx.arc(hx, hy, 6.4, 0, 6.2832);
-  // Arms, and whatever is in them.
-  const w = c.isArmed ? c.currentWeapon : null;
-  const up = !!w && (!c.isPlayer || typeof playerAiming !== 'function' || playerAiming(c));
-  if (up) {
-    const gz = H * 0.74, gx = lx * gz, gy = ly * gz;
-    const two = typeof weaponHands === 'function' && weaponHands(w) === 2;
-    const len = two ? 30 : 15;
-    _cfsLimb(ctx, shX + sx * hw, shY + sy * hw, gx + fx * 9 + sx * 3, gy + fy * 9 + sy * 3, 3.0, 2.6);
-    if (two) _cfsLimb(ctx, shX - sx * hw, shY - sy * hw, gx + fx * 17, gy + fy * 17, 3.0, 2.6);
-    _cfsLimb(ctx, gx + fx * 7 + sx * 2, gy + fy * 7 + sy * 2,
-             gx + fx * (7 + len) + sx * 2, gy + fy * (7 + len) + sy * 2, 1.9, 1.5);
-  }
-  if (!up || (w && !(typeof weaponHands === 'function' && weaponHands(w) === 2))) {
-    const hz = H * 0.50;
-    for (let i = up ? -1 : 1; i >= -1; i -= 2) {
-      const f = -st * i * 0.8;
-      _cfsLimb(ctx, shX + sx * hw * i, shY + sy * hw * i,
-               lx * hz + sx * (hw + 1.5) * i + mx * f, ly * hz + sy * (hw + 1.5) * i + my * f, 3.0, 2.5);
-    }
-  }
-  ctx.fill();
+  const n = celFigureSkeleton(c, pose || null, fall || 0);
+  const P = _cfsP;
+  P.wall = 0; P.lx = LIGHT_DX * k; P.ly = LIGHT_DY * k;
+  _cfsPaint(ctx, _cfsCaps, n, 0, 0, A, !!c.isPlayer);
+  if (_depthOn) celFigureWalls(c, n, A, k);
   return true;
 }
 function charShadowX(off) { return BIOME_ACTIVE ? LIGHT_DX * off * 1.35 * shadowLengthScale() : off; }
