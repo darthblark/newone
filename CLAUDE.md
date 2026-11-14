@@ -3817,3 +3817,15 @@ Verification: `node tools/check-civic-terrace.js`. For visual review,
 `node tools/visual-world.js 1 0 0 0.85 civic hour=9` finds a real plaza using
 p5 noise; add `night rain` for the wet night view. The tool prints the actual
 world coordinates. Its `rain` flag tests surface response, not rain particles.
+
+## Level 1 comic depth
+
+Stick City draws as inked cel solids; see [the depth pass](docs/level1-cel-depth.md).
+`celCityScene()` gates all of it. `CityBuildings3D.draw()` bands each face into
+shade/mid/lit tones, strokes one batched silhouette before the fills and inks
+large roof planes; `drawMassSides()` gives other Level 1 masses the same bands
+and line. `CityBuildings3D.drawShadow()` projects real roof vertices to the
+ground along the sun into a cached world-space path. In Level 1 the 2D pass
+owns sun shadows even with the WebGL rig active: `glRigOwnsSunShadows()` is
+false and `uSunCast` skips the march, so never add a second caster there.
+Keep `BIOMES[1].pal` cool on roads and warm on pavements at its current values.
