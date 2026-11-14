@@ -38143,11 +38143,19 @@ const BIOMES = {
     // light -- night is a wash laid over the top -- so a palette written at
     // night values leaves nothing for daylight to be. These are real overhead
     // daylight readings for asphalt, concrete sidewalk and municipal paint.
+    // COMIC PALETTE. The first set was five neutral greys, measured off real
+    // asphalt and concrete -- correct, and the reason a street read as one
+    // grey sheet with grey rectangles on it. A printed panel separates its
+    // planes by TEMPERATURE: the carriageway leans cool slate-blue, the
+    // pavement and block interior lean warm stone, and the two then part
+    // company at a glance even where their values are close. Values are within
+    // a few levels of the old ones, so the night wash and the light rig -- both
+    // authored against that level -- are unchanged.
     sky: [96, 112, 130],
     pal: {
-      base: [104, 108, 114], alt: [86, 90, 96], dark: [62, 66, 71],
-      accent: [132, 138, 145], road: [78, 81, 86], mark: [226, 208, 126],
-      walk: [162, 166, 172], grass: [74, 112, 62]
+      base: [112, 110, 118], alt: [92, 92, 104], dark: [58, 62, 78],
+      accent: [150, 142, 136], road: [74, 82, 100], mark: [250, 208, 92],
+      walk: [190, 178, 156], grass: [72, 138, 66]
     },
     weather: "ACID_RAIN",
     layout: "CITY",
@@ -49111,15 +49119,28 @@ function drawMassSides(x0, y0, x1, y1, lx, ly, cr, cg, cb, mullion) {
   // mid-grey wall came out near black -- and on a landmark, which carries the
   // widest wall in the game, that put a void the size of a building beside
   // every one of them. The lit end is unchanged; only the shaded end lifts.
+  // Level 1 is drawn as a comic panel: the wall's tone snaps to one of three
+  // flat bands -- cool in shade, warm in sun -- and every face carries an ink
+  // line. The stroke rides the quads that were already being drawn, so it adds
+  // no draw calls; see CityBuildings3D for the roof-kit half of the same look.
+  const cel = celCityScene();
   const face = (nx, ny) => {
     const d = -(nx * LIGHT_DX + ny * LIGHT_DY);
+    if (cel) {
+      if (d < 0.10)      fill(cr * 0.44 + 4,  cg * 0.46 + 6,  cb * 0.56 + 16);
+      else if (d < 0.36) fill(cr * 0.66 + 4,  cg * 0.67 + 5,  cb * 0.71 + 9);
+      else               fill(cr * 0.90 + 8,  cg * 0.86 + 6,  cb * 0.79 + 4);
+      return;
+    }
     const k = 0.46 + 0.34 * (d > 0 ? d : 0);
     fill(cr * k + 5, cg * k + 6, cb * k + 10);
   };
+  if (cel) { stroke(26, 22, 38, 215); strokeWeight(1.5); strokeJoin(ROUND); }
   if (ly > 0)      { face(0, -1); quad(x0, y0, x1, y0, x1 + lx, y0 + ly, x0 + lx, y0 + ly); }
   else if (ly < 0) { face(0,  1); quad(x0, y1, x1, y1, x1 + lx, y1 + ly, x0 + lx, y1 + ly); }
   if (lx > 0)      { face(-1, 0); quad(x0, y0, x0, y1, x0 + lx, y1 + ly, x0 + lx, y0 + ly); }
   else if (lx < 0) { face( 1, 0); quad(x1, y0, x1, y1, x1 + lx, y1 + ly, x1 + lx, y0 + ly); }
+  if (cel) noStroke();
 
   // Mullions, running from the footprint UP THE LEAN.
   //
@@ -52826,6 +52847,10 @@ function charShadowFill(alpha) {
 // Its own scratch pair, because _leanTmp is live in drawBuildings() and in
 // sceneEmitters() and this pass runs between them.
 const _shLean = [0, 0];
+// Ground throw per unit of height, before shadowLengthScale(). Above one on
+// purpose: these masses are held to a modest rise so their walls stay out of
+// the street, and the shadow is where the rest of their height is told.
+const CEL_SHADOW_REACH = 2.3;
 function drawBiomeShadows() {
   // The deferred rig ray-marches the sun against the same silhouettes this
   // pass draws from, so exactly one of the two may run -- both would double the
@@ -53009,6 +53034,40 @@ function drawBiomeShadows() {
       // shadow under an 870-unit theatre is a dark line at one corner, and a
       // mass whose shadow does not scale with it reads as floating.
       const shCap = Math.max(BUILDING_SHADOW_MAX, Math.min(Math.min(w, h) * 0.06, 48));
+      // LEVEL 1 CASTS COMIC SHADOWS: one flat, cool, hard-edged tone thrown the
+      // real length of the mass. The cap above exists so a shadow cannot reach
+      // the next building, and at 24 units under a 40-unit building it also
+      // meant no shadow in the city was long enough to read as one -- a street
+      // of solids with a faint stain at one corner each. A shadow is drawn in
+      // the ground pass, UNDER every mass, so a long one cannot be mistaken for
+      // part of its neighbour: it runs across the road and disappears beneath
+      // whatever stands in its way, which is what a shadow does.
+      const cel = celCityScene() && b.isBlockBuilding;
+      if (cel) {
+        // Firm whenever there is a sun at all. shadowDensity() alone leaves a
+        // lightly overcast noon at a third of this, which is a tint rather
+        // than a shadow; it still takes the tone to zero by nightfall.
+        const celA = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
+        if (celA <= 0.004) continue;
+        const celStyle = 'rgba(24,24,68,' + celA.toFixed(3) + ')';
+        if (cityRoof && CityBuildings3D.drawShadow(b, window, LIGHT_DX * SL * CEL_SHADOW_REACH,
+            LIGHT_DY * SL * CEL_SHADOW_REACH, celStyle)) continue;
+        const cl = Math.min(84, Math.max(rise, Math.min(w, h) * 0.10)) * SL * CEL_SHADOW_REACH;
+        const cdx = LIGHT_DX * cl, cdy = LIGHT_DY * cl;
+        // Hull of the silhouette and its offset copy, for any sign of the sun.
+        const ctx2 = drawingContext;
+        ctx2.fillStyle = celStyle;
+        ctx2.beginPath();
+        if ((cdx >= 0) === (cdy >= 0)) {
+          ctx2.moveTo(x0, y0); ctx2.lineTo(x1, y0); ctx2.lineTo(x1 + cdx, y0 + cdy);
+          ctx2.lineTo(x1 + cdx, y1 + cdy); ctx2.lineTo(x0 + cdx, y1 + cdy); ctx2.lineTo(x0, y1);
+        } else {
+          ctx2.moveTo(x1, y0); ctx2.lineTo(x0, y0); ctx2.lineTo(x0 + cdx, y0 + cdy);
+          ctx2.lineTo(x0 + cdx, y1 + cdy); ctx2.lineTo(x1 + cdx, y1 + cdy); ctx2.lineTo(x1, y1);
+        }
+        ctx2.closePath(); ctx2.fill();
+        continue;
+      }
       const sl = Math.min(shCap, Math.max(cityRoof?cityRoof.maxZ:rise, Math.min(w, h) * 0.10) * 0.95) * SL;
       const dx = LIGHT_DX * sl,    dy = LIGHT_DY * sl;
 
@@ -59203,6 +59262,10 @@ uniform vec3  uAmbCol;
 uniform float uSunPow;
 uniform float uSpec;
 uniform float uShine;
+// 0 when the 2D pass is casting the sun's shadows instead (see
+// celCityScene()): the march is skipped outright and every pixel is treated as
+// reached by the sun, so relief shading and specular still apply.
+uniform float uSunCast;
 out vec4 oCol;
 
 float marchSun(vec2 uv, float h0) {
@@ -59242,7 +59305,7 @@ void main() {
   float h0 = hgt.r * uHeightMax;
 
   float ndl = max(dot(N, uSunDir), 0.0);
-  float vis = marchSun(vUV, h0);
+  float vis = uSunCast > 0.5 ? marchSun(vUV, h0) : 1.0;
 
   // Overhead camera: the eye looks straight down, so V is constant and the
   // Blinn-Phong halfway vector costs one normalize for the whole screen.
@@ -59640,8 +59703,22 @@ function glRigActive() {
 
 // True when the rig, not drawBiomeShadows(), is casting the sun's shadows.
 // Both cast from the same silhouettes, so exactly one of them may run.
+//
+// LEVEL 1 IS THE EXCEPTION, AND IT IS THE 2D PASS THAT KEEPS THE SUN THERE.
+// Its shadows are comic shadows: one flat tone with a hard vector edge, shaped
+// from the real roof geometry (CityBuildings3D.drawShadow). A march through a
+// height buffer at a fraction of the screen's resolution cannot draw that edge
+// -- snapped hard it comes out as a staircase, most visibly down the length of
+// every lamp post -- and left soft it is not the look. So in Stick City the
+// march is switched off (uSunCast) and the three 2D casters this predicate
+// gates all run, exactly as they do when the rig is absent. Still one pass
+// casting the sun, and twenty height samples per pixel the phone no longer
+// pays for. The rig keeps relief shading, specular and every lamp shadow.
+function celCityScene() {
+  return BIOME_ACTIVE && currentLevel === 1 && currentBiome === 1;
+}
 function glRigOwnsSunShadows() {
-  return GLRIG_OWN_SHADOWS && glRigActive() && BIOME_ACTIVE;
+  return GLRIG_OWN_SHADOWS && glRigActive() && BIOME_ACTIVE && !celCityScene();
 }
 
 // Screen-sized targets. Called on init, on window resize and whenever the
@@ -60399,6 +60476,7 @@ function glRigFrame() {
     gl.uniform1f(p._u.uStep0, 3.5);
     gl.uniform1f(p._u.uGrow, 1.14);
     gl.uniform1f(p._u.uPenumbra, 0.10 + 0.55 * skyDiffusion());
+    gl.uniform1f(p._u.uSunCast, celCityScene() ? 0 : 1);
     // Direction TOWARD the sun. LIGHT_DX/DY point the way shadows fall, and the
     // shading frame has y up, so x negates and y does not.
     const Lx = -LIGHT_DX, Ly = LIGHT_DY;
@@ -69503,7 +69581,7 @@ const CityBuildings3D = (() => {
   'use strict';
   const cache=new WeakMap(),lean=[0,0];
   const stats={plans:0,cacheHits:0,projections:0,projectionHits:0,pathBuilds:0,
-    draws:0,faces:0,heightDraws:0,heightFaces:0};
+    draws:0,faces:0,heightDraws:0,heightFaces:0,outlines:0,inkFaces:0,shadowBuilds:0,shadowDraws:0};
   const asset=()=>typeof CITY3D_ASSET!=='undefined'?CITY3D_ASSET:null;
   function profile(b) {
     if(typeof currentLevel==='undefined'||currentLevel!==1||currentBiome!==1||!b||!b.isBlockBuilding||
@@ -69592,7 +69670,24 @@ const CityBuildings3D = (() => {
     // order puts roof slopes before the dormers/equipment they support.
     current.roofFaces.sort((a,c)=>a.order-c.order||a.meanZ-c.meanZ);
     current.faces=current.bodyFaces.concat(current.facadeFaces,current.roofFaces);
-    for(const f of current.faces){f.color=materialColor(current,f);CityProjectedFaces.prepare(f,stats);}
+    for(const f of current.faces){
+      f.color=vivid(materialColor(current,f),f.kind==='wall'?1.5:1.42);
+      // Interior ink goes on the faces big enough to carry a line: the walls and
+      // the main roof planes. Stroking every vent and glazing bar turns the roof
+      // to hatching and doubles the fill cost of the building.
+      let area=0;const q=f.points;
+      for(let i=1;i<q.length-1;i++){
+        const ux=q[i][0]-q[0][0],uy=q[i][1]-q[0][1],uz=q[i][2]-q[0][2],
+          vx=q[i+1][0]-q[0][0],vy=q[i+1][1]-q[0][1],vz=q[i+1][2]-q[0][2];
+        area+=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)*.5;
+      }
+      f.ink=f.kind==='roof'&&area>=90&&f.material!=='glass'&&f.material!=='glass_highlight';
+      // Only a face of some size can be the solid's outline. Vents, glazing
+      // bars and chimney caps sit inside the roof they stand on, and leaving
+      // them out of the hull stroke is most of what that stroke costs.
+      f.hull=f.kind==='wall'||(f.kind==='roof'&&area>=70);
+      CityProjectedFaces.prepare(f,stats);
+    }
     cache.set(b,current);stats.plans++;return current;
   }
   function project(b) {
@@ -69631,6 +69726,41 @@ const CityBuildings3D = (() => {
     if(p.profile==='quay_house'&&p.style===2&&f.material==='roof_tile_dark')return [54,85,86];
     return palette[f.material]||[142,153,148];
   }
+  // COMIC INK AND CEL TONES.
+  //
+  // The roof kit was lit with one continuous Lambert term, which at this size
+  // is a smooth grey ramp: every face of a building lands within a few levels
+  // of its neighbour and the solid reads as a tinted decal. A comic panel says
+  // "this is a box" with three flat tones and a line round it, and that is what
+  // these do. Nothing here touches geometry, projection, caches or the height
+  // field: it is the fill style of faces that were already being filled, one
+  // batched silhouette stroke per building and one cached ground path.
+  //
+  //   * vivid(): material colours pushed away from their own grey. Applied once
+  //     per plan, so it costs nothing per frame.
+  //   * celTone(): the diffuse term snapped to shade / mid / lit. The shade band
+  //     leans cool and the lit band warm, which is what separates a wall in
+  //     shadow from a wall that is merely painted a darker colour.
+  //   * the silhouette is the "inverted hull": every visible face is stroked in
+  //     ink FIRST, in one path, and the fills then cover the inner half of each
+  //     line. What survives is the outline of the whole solid.
+  const CEL_INK='rgb(26,22,38)';
+  function vivid(c,amount) {
+    const l=c[0]*.30+c[1]*.59+c[2]*.11,k=amount===undefined?1.42:amount;
+    const q=v=>Math.max(0,Math.min(255,Math.round(l+(v-l)*k)));
+    return [q(c[0]),q(c[1]),q(c[2])];
+  }
+  // [value, r, g, b] multipliers for the three bands of each kind of face.
+  const CEL_WALL=[[.50,.86,.90,1.16],[.74,.97,.98,1.05],[.98,1.05,1.01,.93]];
+  const CEL_ROOF=[[.64,.88,.92,1.14],[.86,.98,.99,1.03],[1.05,1.05,1.02,.94]];
+  const CEL_TRIM=[[.72,.92,.95,1.10],[.90,1,1,1],[1.04,1.03,1.01,.96]];
+  function celBand(f,diffuse) {
+    // Thresholds differ by kind: a wall is vertical, so its diffuse never gets
+    // near 1 and one threshold set would leave every wall in the middle band.
+    if(f.kind==='wall')return diffuse<.10?0:diffuse<.36?1:2;
+    if(f.kind==='facade')return diffuse<.10?0:diffuse<.36?1:2;
+    return diffuse<.56?0:diffuse<.74?1:2;
+  }
   function draw(b,g=window) {
     const p=project(b),ctx=g&&(g.drawingContext||g);
     if(!p||!ctx||typeof ctx.fill!=='function')return false;
@@ -69640,23 +69770,89 @@ const CityBuildings3D = (() => {
     const target=typeof ctx.getTransform==='function'?ctx.getTransform():null;
     ctx.save();
     try{
+      // The cel bands sit on top of the old daylight term, so dusk still dims
+      // the whole solid and the night wash has the same level to subtract from.
+      const dayK=(ambient-.76)/.06*.10+.90,burnt=p.burnt?.38:1;
       const paint=f=>{
         if(!f.visible)return;
         const n=f.normal,c=f.color,diffuse=Math.max(0,(-n[0]*dx-n[1]*dy+n[2]*.9)/1.34536);
-        let k=f.kind==='wall'?.53+.34*diffuse:ambient+.23*diffuse;
-        if(p.burnt)k*=.38;
+        const band=celBand(f,diffuse);
         const lit=f.kind==='facade'&&f.material==='window'&&daylight<.48&&Math.floor(f.meanZ+b.x+b.y)%4===0;
-        const key=Math.round(k*512)+'|'+lit;
+        const key=band+'|'+Math.round(dayK*64)+'|'+lit+'|'+p.burnt;
         if(f.colorKey!==key){f.colorKey=key;
-          f.colorStyle=lit?'rgb(225,174,94)':'rgb('+Math.round(c[0]*k)+','+Math.round(c[1]*k)+','+Math.round(c[2]*k)+')';}
+          const t=(f.kind==='wall'?CEL_WALL:f.kind==='facade'||f.material==='trim'||f.material==='stone'?CEL_TRIM:CEL_ROOF)[band];
+          const k=t[0]*dayK*burnt,q=(v,m)=>Math.max(0,Math.min(255,Math.round(v*k*m)));
+          f.colorStyle=lit?'rgb(255,196,92)':'rgb('+q(c[0],t[1])+','+q(c[1],t[2])+','+q(c[2],t[3])+')';}
         ctx.fillStyle=f.colorStyle;
         CityProjectedFaces.fill(ctx,f,target);stats.faces++;
+        if(f.ink&&f.path&&target){ctx.stroke(f.path);stats.inkFaces++;}
       };
+      // Silhouette first: one path, one stroke, covered on its inner half by
+      // everything painted after it.
+      if(target)ctx.setTransform(target);
+      ctx.strokeStyle=CEL_INK;ctx.lineJoin='bevel';ctx.lineWidth=3.4;
+      ctx.beginPath();
+      for(const f of p.faces){
+        if(!f.visible||!f.hull)continue;
+        const q=f.projected;ctx.moveTo(q[0],q[1]);
+        for(let i=2;i<q.length;i+=2)ctx.lineTo(q[i],q[i+1]);ctx.closePath();
+      }
+      ctx.stroke();stats.outlines++;
+      ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
       for(const f of p.bodyFaces)paint(f);
+      // The corners between two showing walls, and the eave over them.
+      if(target)ctx.setTransform(target);
+      ctx.lineWidth=1.3;ctx.strokeStyle='rgba(26,22,38,.78)';ctx.beginPath();
+      for(const f of p.bodyFaces){
+        if(!f.visible)continue;const q=f.projected;
+        ctx.moveTo(q[0],q[1]);ctx.lineTo(q[6],q[7]);ctx.lineTo(q[4],q[5]);ctx.lineTo(q[2],q[3]);
+      }
+      ctx.stroke();
       for(const f of p.facadeFaces)paint(f);
+      ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
       for(const f of p.roofFaces)paint(f);
     }finally{ctx.restore();}
     stats.draws++;return true;
+  }
+  // THE SHADOW IS THE SHAPE OF THE BUILDING, NOT OF ITS BOX.
+  //
+  // The shared pass hulls a footprint with its offset copy, which is right for
+  // a box and says nothing about what is on top of it. Every vertex here
+  // already carries a real height, so each one is dropped to the ground along
+  // the sun at its own height: a ridge throws a gable, a chimney throws a
+  // notch, a plant room steps the edge of a flat roof. That outline is the
+  // strongest statement of the roof's form this camera can make, because it
+  // is the only place the profile is seen from the side.
+  //
+  // A shadow lies on the ground, so its path is in WORLD space and does not
+  // depend on the camera at all. It is rebuilt only when the sun has moved a
+  // thirty-second of a unit per unit of height -- every few seconds of play --
+  // and is otherwise one cached fill per building. Each polygon is wound the
+  // same way before it joins the path, so the nonzero rule unions them and no
+  // overlap is ever filled twice.
+  function drawShadow(b,g,ox,oy,style) {
+    const p=plan(b),ctx=g&&(g.drawingContext||g);
+    if(!p||!ctx||typeof ctx.fill!=='function'||typeof Path2D!=='function')return false;
+    const qx=Math.round(ox*32)/32,qy=Math.round(oy*32)/32;
+    if(!p.shadowPath||p.shadowOx!==qx||p.shadowOy!==qy){
+      const path=new Path2D(),pts=[];
+      const add=n=>{
+        let area=0;
+        for(let i=0;i<n;i++){const j=(i+1)%n;area+=pts[i*2]*pts[j*2+1]-pts[j*2]*pts[i*2+1];}
+        if(Math.abs(area)<.5)return;
+        if(area>0){path.moveTo(pts[0],pts[1]);for(let i=1;i<n;i++)path.lineTo(pts[i*2],pts[i*2+1]);}
+        else{path.moveTo(pts[(n-1)*2],pts[(n-1)*2+1]);for(let i=n-2;i>=0;i--)path.lineTo(pts[i*2],pts[i*2+1]);}
+        path.closePath();
+      };
+      for(const f of p.faces){
+        if(f.kind==='facade')continue;
+        const n=f.points.length;
+        for(let i=0;i<n;i++){const v=f.points[i];pts[i*2]=v[0]+qx*v[2];pts[i*2+1]=v[1]+qy*v[2];}
+        add(n);
+      }
+      p.shadowPath=path;p.shadowOx=qx;p.shadowOy=qy;stats.shadowBuilds++;
+    }
+    ctx.fillStyle=style;ctx.fill(p.shadowPath);stats.shadowDraws++;return true;
   }
   function paintHeight(g,b,wet=0) {
     const p=project(b),ctx=g&&(g.drawingContext||g);if(!p||!ctx||typeof ctx.fill!=='function')return false;
@@ -69682,7 +69878,7 @@ const CityBuildings3D = (() => {
   function depth(b) {
     const p=project(b);return p?Math.max(b.y+b.h/2,p.roofBounds[3]):b.y+(b.h||0)/2;
   }
-  return {profile,plan,project,draw,paintHeight,depth,stats,getDiagnostics(){return {...stats};}};
+  return {profile,plan,project,draw,drawShadow,paintHeight,depth,stats,getDiagnostics(){return {...stats};}};
 })();
 // Grounded quayside hardware. Local rotation precedes the shared world lean;
 // each vertex keeps its own height instead of lifting the entire prop sprite.
@@ -69807,6 +70003,46 @@ const CityQuayProps3D = (() => {
       if(f.colorKey!==key){f.colorKey=key;f.colorStyle='rgb('+Math.round(c[0]*k)+','+Math.round(c[1]*k)+','+Math.round(c[2]*k)+')';}
       ctx.fillStyle=f.colorStyle;CityProjectedFaces.fill(ctx,f,target);stats.faces++;
     }}finally{ctx.restore();}stats.draws++;return true;
+  }
+  // THE SHADOW IS THE SHAPE OF THE BUILDING, NOT OF ITS BOX.
+  //
+  // The shared pass hulls a footprint with its offset copy, which is right for
+  // a box and says nothing about what is on top of it. Every vertex here
+  // already carries a real height, so each one is dropped to the ground along
+  // the sun at its own height: a ridge throws a gable, a chimney throws a
+  // notch, a plant room steps the edge of a flat roof. That outline is the
+  // strongest statement of the roof's form this camera can make, because it
+  // is the only place the profile is seen from the side.
+  //
+  // A shadow lies on the ground, so its path is in WORLD space and does not
+  // depend on the camera at all. It is rebuilt only when the sun has moved a
+  // thirty-second of a unit per unit of height -- every few seconds of play --
+  // and is otherwise one cached fill per building. Each polygon is wound the
+  // same way before it joins the path, so the nonzero rule unions them and no
+  // overlap is ever filled twice.
+  function drawShadow(b,g,ox,oy,style) {
+    const p=plan(b),ctx=g&&(g.drawingContext||g);
+    if(!p||!ctx||typeof ctx.fill!=='function'||typeof Path2D!=='function')return false;
+    const qx=Math.round(ox*32)/32,qy=Math.round(oy*32)/32;
+    if(!p.shadowPath||p.shadowOx!==qx||p.shadowOy!==qy){
+      const path=new Path2D(),pts=[];
+      const add=n=>{
+        let area=0;
+        for(let i=0;i<n;i++){const j=(i+1)%n;area+=pts[i*2]*pts[j*2+1]-pts[j*2]*pts[i*2+1];}
+        if(Math.abs(area)<.5)return;
+        if(area>0){path.moveTo(pts[0],pts[1]);for(let i=1;i<n;i++)path.lineTo(pts[i*2],pts[i*2+1]);}
+        else{path.moveTo(pts[(n-1)*2],pts[(n-1)*2+1]);for(let i=n-2;i>=0;i--)path.lineTo(pts[i*2],pts[i*2+1]);}
+        path.closePath();
+      };
+      for(const f of p.faces){
+        if(f.kind==='facade')continue;
+        const n=f.points.length;
+        for(let i=0;i<n;i++){const v=f.points[i];pts[i*2]=v[0]+qx*v[2];pts[i*2+1]=v[1]+qy*v[2];}
+        add(n);
+      }
+      p.shadowPath=path;p.shadowOx=qx;p.shadowOy=qy;stats.shadowBuilds++;
+    }
+    ctx.fillStyle=style;ctx.fill(p.shadowPath);stats.shadowDraws++;return true;
   }
   function paintHeight(g,b,wet=0) {
     const p=project(b),ctx=g&&(g.drawingContext||g);if(!p||!ctx||typeof ctx.fill!=='function')return false;
