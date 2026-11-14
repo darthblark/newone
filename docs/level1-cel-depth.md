@@ -28,9 +28,14 @@ Morning light across a courtyard district:
 - **One sun caster.** In Level 1 the 2D pass owns sun shadows even when the
   WebGL light rig is running (`celCityScene()`, `uSunCast`). The rig skips its
   shadow ray march there and keeps relief shading, specular and lamp shadows.
-- **Palette.** `BIOMES[1].pal` moves from five neutral greys to cool slate
-  roads against warm stone pavements, with stronger grass and lane paint.
-  Roof-kit material colours are saturated once per building plan (`vivid`).
+- **Figure shadows.** `celFigureShadow()` replaces the contact oval under
+  humanoids with a person-shaped cast shadow: feet, hips, shoulders and head
+  are each dropped along the sun at their own height, so it stays welded to
+  the boots, swings through the day, scissors with the stride and lays a
+  raised weapon's barrel out on the road. One path and one fill per figure.
+  See [previews/level1-figure-shadows.png](previews/level1-figure-shadows.png).
+- **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
+  material colours are saturated once per building plan (`vivid`).
 
 All of it is gated on `currentLevel === 1 && currentBiome === 1`; other levels
 draw exactly as before.

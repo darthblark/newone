@@ -28151,6 +28151,7 @@ if(this.stunTimer>0&&this.skeletonTimer<=0){drawStunnedFigure(this);pop();return
     // scene look like it had two suns in it. Airborne units are the exception,
     // see CHAR_AIRBORNE.
     if (stancePose.crouch > 0) drawCombatStanceShadow(this, stancePose);
+    else if (celFigureShadow(this)) {}
     else if (!charShadowOwned(this.eType)) {
     charShadowFill(sAlp);
     if (this.eType === "SAUCER" || this.eType === "SAUCER_RED") { ellipse(charShadowX(sOff * 2), charShadowY(sOff * 2), 80, 80); }
@@ -38143,19 +38144,11 @@ const BIOMES = {
     // light -- night is a wash laid over the top -- so a palette written at
     // night values leaves nothing for daylight to be. These are real overhead
     // daylight readings for asphalt, concrete sidewalk and municipal paint.
-    // COMIC PALETTE. The first set was five neutral greys, measured off real
-    // asphalt and concrete -- correct, and the reason a street read as one
-    // grey sheet with grey rectangles on it. A printed panel separates its
-    // planes by TEMPERATURE: the carriageway leans cool slate-blue, the
-    // pavement and block interior lean warm stone, and the two then part
-    // company at a glance even where their values are close. Values are within
-    // a few levels of the old ones, so the night wash and the light rig -- both
-    // authored against that level -- are unchanged.
     sky: [96, 112, 130],
     pal: {
-      base: [112, 110, 118], alt: [92, 92, 104], dark: [58, 62, 78],
-      accent: [150, 142, 136], road: [74, 82, 100], mark: [250, 208, 92],
-      walk: [190, 178, 156], grass: [72, 138, 66]
+      base: [104, 108, 114], alt: [86, 90, 96], dark: [62, 66, 71],
+      accent: [132, 138, 145], road: [78, 81, 86], mark: [226, 208, 126],
+      walk: [162, 166, 172], grass: [74, 112, 62]
     },
     weather: "ACID_RAIN",
     layout: "CITY",
@@ -52832,6 +52825,113 @@ function charShadowOwned(eT) {
   return typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows();
 }
 
+// A FIGURE CASTS A FIGURE.
+//
+// The contact oval says "something is here" and nothing about what. In Stick
+// City every building now throws its own profile, so a person standing in the
+// same street with a grey disc under them reads as a token on a board. This is
+// the same construction CityBuildings3D.drawShadow() uses, applied to a body:
+// each part is dropped to the ground along the sun AT ITS OWN HEIGHT. Feet stay
+// under the feet, hips land part-way out, shoulders further, the head last --
+// so the shadow is a person lying on the pavement, welded to the boots, and it
+// swings round them through the day with every other shadow in the scene.
+//
+// Because the parts keep their real horizontal offsets, the shadow answers the
+// pose for free: it is broad when the shoulders are square to the sun and
+// narrow side-on, the legs scissor with the stride, the arms swing against
+// them, and a raised weapon lays its barrel out across the road and sweeps as
+// the player aims. A shadow that MOVES with the figure is most of what plants
+// the figure on the ground.
+//
+// One path, one fill: every piece is wound the same way so the nonzero rule
+// unions them and no overlap is darkened twice. No allocation, no cache, a
+// dozen short subpaths per figure. Humanoids only -- the vehicles, beasts and
+// aircraft keep the shapes that were drawn for them.
+const CEL_FIGURE_H = 21;          // standing height, in the units masses use
+const _cfs = { ctx: null };
+function _cfsPoly(ctx, x0, y0, x1, y1, x2, y2, x3, y3) {
+  // Same sense as Canvas ellipse(), whatever order the corners arrived in.
+  const a = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  ctx.moveTo(x0, y0);
+  if (a >= 0) { ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); }
+  else        { ctx.lineTo(x3, y3); ctx.lineTo(x2, y2); ctx.lineTo(x1, y1); }
+  ctx.closePath();
+}
+// A limb: a tapered bar from (ax,ay) to (bx,by) with rounded ends.
+function _cfsLimb(ctx, ax, ay, bx, by, ra, rb) {
+  const dx = bx - ax, dy = by - ay, m = Math.sqrt(dx * dx + dy * dy);
+  if (m > 0.5) {
+    const px = -dy / m, py = dx / m;
+    _cfsPoly(ctx, ax + px * ra, ay + py * ra, bx + px * rb, by + py * rb,
+                  bx - px * rb, by - py * rb, ax - px * ra, ay - py * ra);
+  }
+  ctx.moveTo(ax + ra, ay); ctx.arc(ax, ay, ra, 0, 6.2832);
+  ctx.moveTo(bx + rb, by); ctx.arc(bx, by, rb, 0, 6.2832);
+}
+function celFigureShadow(c) {
+  if (!celCityScene() || CHAR_AIRBORNE[c.eType] || !ragHumanoid(c.eType) ||
+      c.eType === 'ARMORED' || typeof drawingContext === 'undefined') return false;
+  const ctx = drawingContext;
+  if (!ctx || typeof ctx.arc !== 'function') return false;
+  const SD = shadowDensity();
+  const A = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
+  if (A <= 0.004) return true;                 // night: the lamps own it
+  const k = shadowLengthScale() * CEL_SHADOW_REACH;
+  const lx = LIGHT_DX * k, ly = LIGHT_DY * k;  // ground throw per unit height
+  const H = CEL_FIGURE_H * Math.max(0.75, (c.bodyH || 27) / 27);
+  const fa = Number.isFinite(c.aimAngle) ? c.aimAngle : 0;
+  const ma = c.isMoving && Number.isFinite(c.moveAngle) ? c.moveAngle : fa;
+  const fx = Math.cos(fa), fy = Math.sin(fa), sx = -fy, sy = fx;
+  const mx = Math.cos(ma), my = Math.sin(ma), nx = -my, ny = mx;
+  const hw = (c.bodyH || 27) * 0.40;           // shoulder half-width
+  const g = c.isMoving ? Math.max(0.35, Math.min(1, c.gait === undefined ? 0.6 : c.gait + 0.25)) : 0;
+  const st = g * Math.sin(c.walkCycle || 0) * 6.5;
+  const hipZ = H * 0.50, shZ = H * 0.84, hdZ = H * 0.98;
+  const hipX = lx * hipZ, hipY = ly * hipZ, shX = lx * shZ, shY = ly * shZ;
+  ctx.fillStyle = 'rgba(24,24,68,' + A.toFixed(3) + ')';
+  ctx.beginPath();
+  // Legs, in the frame the feet travel in.
+  for (let i = -1; i <= 1; i += 2) {
+    const f = st * i;
+    _cfsLimb(ctx, nx * 4.2 * i + mx * f, ny * 4.2 * i + my * f,
+             hipX + nx * 3.4 * i, hipY + ny * 3.4 * i, 3.1, 3.7);
+  }
+  // Torso: hips to shoulders, as wide as the body is ACROSS the sun.
+  const lm = Math.sqrt(lx * lx + ly * ly) || 1, px = -ly / lm, py = lx / lm;
+  const across = Math.abs(sx * px + sy * py), along = Math.abs(fx * px + fy * py);
+  const shR = Math.sqrt(hw * hw * across * across + 36 * along * along);
+  const hpR = Math.sqrt(hw * hw * 0.42 * across * across + 25 * along * along);
+  _cfsPoly(ctx, hipX + px * hpR, hipY + py * hpR, shX + px * shR, shY + py * shR,
+                shX - px * shR, shY - py * shR, hipX - px * hpR, hipY - py * hpR);
+  ctx.moveTo(shX + sx * hw + 3.6, shY + sy * hw); ctx.arc(shX + sx * hw, shY + sy * hw, 3.6, 0, 6.2832);
+  ctx.moveTo(shX - sx * hw + 3.6, shY - sy * hw); ctx.arc(shX - sx * hw, shY - sy * hw, 3.6, 0, 6.2832);
+  _cfsLimb(ctx, shX + sx * hw, shY + sy * hw, shX - sx * hw, shY - sy * hw, 3.6, 3.6);
+  // Head.
+  const hx = lx * hdZ + fx * 1.5, hy = ly * hdZ + fy * 1.5;
+  ctx.moveTo(hx + 6.4, hy); ctx.arc(hx, hy, 6.4, 0, 6.2832);
+  // Arms, and whatever is in them.
+  const w = c.isArmed ? c.currentWeapon : null;
+  const up = !!w && (!c.isPlayer || typeof playerAiming !== 'function' || playerAiming(c));
+  if (up) {
+    const gz = H * 0.74, gx = lx * gz, gy = ly * gz;
+    const two = typeof weaponHands === 'function' && weaponHands(w) === 2;
+    const len = two ? 30 : 15;
+    _cfsLimb(ctx, shX + sx * hw, shY + sy * hw, gx + fx * 9 + sx * 3, gy + fy * 9 + sy * 3, 3.0, 2.6);
+    if (two) _cfsLimb(ctx, shX - sx * hw, shY - sy * hw, gx + fx * 17, gy + fy * 17, 3.0, 2.6);
+    _cfsLimb(ctx, gx + fx * 7 + sx * 2, gy + fy * 7 + sy * 2,
+             gx + fx * (7 + len) + sx * 2, gy + fy * (7 + len) + sy * 2, 1.9, 1.5);
+  }
+  if (!up || (w && !(typeof weaponHands === 'function' && weaponHands(w) === 2))) {
+    const hz = H * 0.50;
+    for (let i = up ? -1 : 1; i >= -1; i -= 2) {
+      const f = -st * i * 0.8;
+      _cfsLimb(ctx, shX + sx * hw * i, shY + sy * hw * i,
+               lx * hz + sx * (hw + 1.5) * i + mx * f, ly * hz + sy * (hw + 1.5) * i + my * f, 3.0, 2.5);
+    }
+  }
+  ctx.fill();
+  return true;
+}
 function charShadowX(off) { return BIOME_ACTIVE ? LIGHT_DX * off * 1.35 * shadowLengthScale() : off; }
 function charShadowY(off) { return BIOME_ACTIVE ? LIGHT_DY * off * 1.35 * shadowLengthScale() : off; }
 function charShadowFill(alpha) {

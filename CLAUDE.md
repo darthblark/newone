@@ -3828,4 +3828,7 @@ and line. `CityBuildings3D.drawShadow()` projects real roof vertices to the
 ground along the sun into a cached world-space path. In Level 1 the 2D pass
 owns sun shadows even with the WebGL rig active: `glRigOwnsSunShadows()` is
 false and `uSunCast` skips the march, so never add a second caster there.
-Keep `BIOMES[1].pal` cool on roads and warm on pavements at its current values.
+`celFigureShadow()` gives Level 1 humanoids a person-shaped cast shadow in the
+same tone, built from the pose at each part's own height; airborne units,
+beasts and vehicles keep their ovals. Do not change `BIOMES[1].pal` for style:
+the city's ground colours stay as authored.
