@@ -52940,7 +52940,7 @@ const CEL_FIGURE_SOFT2 = [-0.6, 0.7];
 function _cfsPaint(ctx, caps, n, ox, oy, A, fine) {
   const L = fine ? CEL_FIGURE_SOFT : CEL_FIGURE_SOFT2;
   const a = 1 - Math.pow(1 - A, 1 / L.length);
-  ctx.fillStyle = 'rgba(24,24,68,' + a.toFixed(4) + ')';
+  ctx.fillStyle = celShadowStyle(a);
   for (let j = 0; j < L.length; j++) _cfsLayer(ctx, caps, n, ox, oy, L[j]);
 }
 // The pose, as capsules in the figure's own ground frame (world axes, origin at
@@ -53050,20 +53050,28 @@ function celFigureSkeleton(c, pose, fall) {
 const _celShadeCache = new WeakMap();
 const _celShadeList = [];
 function _celShadeGather(x, y, reach) {
+  // A figure's shadow lands up to a body-length away, and the building that
+  // shades THAT ground can be on any side of the figure. Three samples toward
+  // the sun missed it whenever a grid cell boundary fell between the figure
+  // and a wall it was standing beside, which left pieces of the figure's
+  // shadow painted on top of the building's. A small lattice round the figure
+  // covers its whole reach.
   const list = _celShadeList; list.length = 0;
   if (typeof colNear !== 'function') return list;
-  for (let i = 0; i < 3; i++) {
-    const near = colNear(x - LIGHT_DX * reach * i * 0.5, y - LIGHT_DY * reach * i * 0.5);
+  const span = Math.max(reach * 2, 260);
+  for (let i = 0; i < 9; i++) {
+    const near = colNear(x + (i % 3 - 1) * 150, y + (Math.floor(i / 3) - 1) * 150);
     for (let j = 0; j < near.length; j++) {
       const b = near[j];
       if (!b.isBlockBuilding || b.isBiomeProp || !(b.w > 0) || !(b.h > 0) || list.indexOf(b) >= 0) continue;
       // colNear() hands back the whole ring when its grid is stale.
-      if (Math.abs(x - b.x) > b.w / 2 + reach * 2 || Math.abs(y - b.y) > b.h / 2 + reach * 2) continue;
+      if (Math.abs(x - b.x) > b.w / 2 + span || Math.abs(y - b.y) > b.h / 2 + span) continue;
       // Standing inside a footprint is a roof question, not a shadow one.
       if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) continue;
       list.push(b);
-      if (list.length >= 12) return list;
+      if (list.length >= 16) return list;
     }
+    if (near === activeBuildings) break;       // one pass was the whole ring
   }
   return list;
 }
@@ -53129,8 +53137,9 @@ function celShadowAlpha() {
 // Soft edges come from resolution, not blur: the silhouette is rendered small
 // and stretched back up, and bilinear filtering is the penumbra.
 const PLAYER3D_STAND_Z = 35.5;          // model units, feet to crown, standing
-const CEL_CAST_COLOR = [24 / 255, 24 / 255, 68 / 255];
-const CEL_CAST_TINT = [0.66, 0.68, 0.86];
+const CEL_CAST_COLOR = [29 / 255, 34 / 255, 44 / 255];
+// What full shade multiplies a figure by: darker, and only a breath cooler.
+const CEL_CAST_TINT = [0.64, 0.66, 0.72];
 const _celCast = { matrix: new Float32Array(16), color: CEL_CAST_COLOR };
 const _celCastOpts = { cast: _celCast, view: false, outline: false, resolutionScale: 0.5,
   includeParts: undefined, excludeParts: undefined, shade: null };
@@ -53155,7 +53164,8 @@ function celFigureShadeBoxes(actor, T, sW, k, day) {
   if (!list.length) return null;
   const d = _celShadeDesc, sL = Math.abs(T.a) / sW, zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
   if (!(sL > 0)) return null;
-  // Nearest four by distance to the footprint.
+  // Nearest four, to the figure or to the far end of its shadow.
+  const tipX = actor.x + LIGHT_DX * k * CEL_FIGURE_H, tipY = actor.y + LIGHT_DY * k * CEL_FIGURE_H;
   let n = 0;
   for (let pick = 0; pick < 4; pick++) {
     let best = -1, bd = Infinity;
@@ -53163,7 +53173,8 @@ function celFigureShadeBoxes(actor, T, sW, k, day) {
       const b = list[i];
       if (!b) continue;
       const dx = Math.max(Math.abs(actor.x - b.x) - b.w / 2, 0), dy = Math.max(Math.abs(actor.y - b.y) - b.h / 2, 0);
-      const q = dx * dx + dy * dy;
+      const ex = Math.max(Math.abs(tipX - b.x) - b.w / 2, 0), ey = Math.max(Math.abs(tipY - b.y) - b.h / 2, 0);
+      const q = Math.min(dx * dx + dy * dy, ex * ex + ey * ey);
       if (q < bd) { bd = q; best = i; }
     }
     if (best < 0) break;
@@ -53193,6 +53204,7 @@ function celFigureCast3D(actor, snapshot, ctx, options) {
   const T = ctx.getTransform(), det = T.a * T.d - T.b * T.c;
   const sW = zoom * (typeof pixelDensity === 'function' ? pixelDensity() : 1);
   if (!(Math.abs(det) > 1e-9) || !(sW > 0)) return null;
+  { const c = celShadowRGB(); CEL_CAST_COLOR[0] = c[0] / 255; CEL_CAST_COLOR[1] = c[1] / 255; CEL_CAST_COLOR[2] = c[2] / 255; }
   const shade = celFigureShadeBoxes(actor, T, sW, k, day);
   if (A > 0.01) {
     // The sun's ground throw, brought into whatever frame the actor is being
@@ -53241,13 +53253,21 @@ function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k, model) {
   for (let i = 0; i < 8; i++) job.quad[i] = q[i];
 }
 const _cfsQuad = new Float32Array(8);
+const _cfsWallNear = [];
 function celFigureWalls(c, n, A, k, model) {
   if (typeof colNear !== 'function' || _cfsJobN >= 24) return;
   const reach = CEL_FIGURE_H * 1.25 * k + 16;
   const ux = LIGHT_DX, uy = LIGHT_DY;
   const first = _cfsJobN;
   for (let pass = 0; pass < 2; pass++) {
-    const list = pass ? colNear(c.x + ux * reach, c.y + uy * reach) : colNear(c.x, c.y);
+    // Copied: the shade test below queries the index again, and colNear()
+    // answers from one shared scratch array.
+    const near = pass ? colNear(c.x + ux * reach, c.y + uy * reach) : colNear(c.x, c.y);
+    const list = _cfsWallNear; list.length = 0;
+    for (let i = 0; i < near.length; i++) {
+      const q = near[i];
+      if (q.isBlockBuilding && Math.abs(q.x - c.x) < q.w / 2 + reach + 40 && Math.abs(q.y - c.y) < q.h / 2 + reach + 40) list.push(q);
+    }
     for (let i = 0; i < list.length; i++) {
       const b = list[i];
       if (!b.isBlockBuilding || b.isBiomeProp || !(b.w > 0) || !(b.h > 0)) continue;
@@ -53275,6 +53295,16 @@ function celFigureWalls(c, n, A, k, model) {
         }
       }
       if (!wall) continue;
+      // A wall standing in another building's shadow takes none of ours.
+      {
+        const wxp = wall === 1 ? c.x + ux * (plane - c.y) / uy : plane;
+        const wyp = wall === 1 ? plane : c.y + uy * (plane - c.x) / ux;
+        const others = _celShadeGather(wxp, wyp, k * 46), at = others.indexOf(b);
+        if (at >= 0) others.splice(at, 1);
+        if (others.length && _celShadeRay(others, wxp - ux * 2, wyp - uy * 2, 8, k) > 0.6) continue;
+        massLean(b.x, b.y, rise, _cfsWallLean);
+        _cfsWallLean[0] /= rise; _cfsWallLean[1] /= rise;
+      }
       let seen = false;                        // both cell lists can hold it
       for (let j = first; j < _cfsJobN; j++) if (_cfsJobs[j].b === b) { seen = true; break; }
       if (seen) continue;
@@ -53360,6 +53390,23 @@ const _shLean = [0, 0];
 // purpose: these masses are held to a modest rise so their walls stay out of
 // the street, and the shadow is where the rest of their height is told.
 const CEL_SHADOW_REACH = 2.3;
+// THE SHADOW'S COLOUR IS THE GAME'S OWN. Every shadow here was always the
+// biome's sky at about a third -- a dark neutral slate -- and the first comic
+// pass replaced that with a saturated indigo, which read as blue paint on the
+// road. The hue is back to the sky-derived one; only the strength is new.
+// One definition, read by the building shadows, both figure casters and the
+// tint a shaded figure takes.
+const _celShadowRGB = [29, 34, 44];
+function celShadowRGB() {
+  const sky = BIOMES[currentBiome] ? BIOMES[currentBiome].sky : [96, 112, 130];
+  _celShadowRGB[0] = Math.round(sky[0] * 0.30); _celShadowRGB[1] = Math.round(sky[1] * 0.30);
+  _celShadowRGB[2] = Math.round(sky[2] * 0.34);
+  return _celShadowRGB;
+}
+function celShadowStyle(alpha) {
+  const c = celShadowRGB();
+  return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha.toFixed(4) + ')';
+}
 function drawBiomeShadows() {
   // The deferred rig ray-marches the sun against the same silhouettes this
   // pass draws from, so exactly one of the two may run -- both would double the
@@ -53558,7 +53605,7 @@ function drawBiomeShadows() {
         // than a shadow; it still takes the tone to zero by nightfall.
         const celA = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
         if (celA <= 0.004) continue;
-        const celStyle = 'rgba(24,24,68,' + celA.toFixed(3) + ')';
+        const celStyle = celShadowStyle(celA);
         if (cityRoof && CityBuildings3D.drawShadow(b, window, LIGHT_DX * SL * CEL_SHADOW_REACH,
             LIGHT_DY * SL * CEL_SHADOW_REACH, celStyle)) continue;
         const cl = Math.min(84, Math.max(rise, Math.min(w, h) * 0.10)) * SL * CEL_SHADOW_REACH;

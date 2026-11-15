@@ -3837,6 +3837,8 @@ both. Building shadows shade figures per fragment: `celFigureShadeBoxes()`
 passes nearby footprints and roof heights to the Player3D shader (`uShadeBox`,
 `uShadeTop`, `uShadeDir`), which tints only fragments whose sun ray enters a
 box, and in the cast pass drops only the shadow that lands in building shade.
-Do not go back to a whole-figure tint or fade for model-drawn figures. Airborne units, beasts and vehicles
+Do not go back to a whole-figure tint or fade for model-drawn figures. Every
+Level 1 shadow takes its colour from `celShadowRGB()` (the sky-derived slate
+the game always used); do not hard-code a hue. Airborne units, beasts and vehicles
 keep their ovals. Do not change `BIOMES[1].pal` for style:
 the city's ground colours stay as authored.

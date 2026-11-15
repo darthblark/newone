@@ -51,6 +51,13 @@ Morning light across a courtyard district:
   test at the ground point and drops only the part of the figure's own shadow
   that lands inside a building's. Edges ramp over about five units. Figures the
   model does not draw use `celFigureShade()`, a whole-figure fade.
+- **Shadow colour.** Shadows use the game's original sky-derived tone
+  (`celShadowRGB()`, the biome sky at about a third), not the indigo the first
+  version of this pass introduced. Only their strength and shape are new.
+- **Trim.** The shade lookup samples a lattice round each figure, so the
+  building that shades the ground a figure's shadow lands on is found
+  whichever side it is on. A wall already in another building's shadow takes
+  no figure shadow.
 - **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
   material colours are saturated once per building plan (`vivid`).
 
