@@ -3833,7 +3833,10 @@ Player3D snapshot through a `cast` matrix (ground shear, or a per-face wall
 fold queued for `celFigureWallFlush()`), at low resolution with four offset
 taps for the soft edge. `celFigureModelCasts()` decides whether the model or
 the `celFigureSkeleton()` capsule fallback owns a figure's shadow; never draw
-both. `celFigureShade()` ray-tests building shadows: shaded figures take
-`uTint` and lose their own cast shadow. Airborne units, beasts and vehicles
+both. Building shadows shade figures per fragment: `celFigureShadeBoxes()`
+passes nearby footprints and roof heights to the Player3D shader (`uShadeBox`,
+`uShadeTop`, `uShadeDir`), which tints only fragments whose sun ray enters a
+box, and in the cast pass drops only the shadow that lands in building shade.
+Do not go back to a whole-figure tint or fade for model-drawn figures. Airborne units, beasts and vehicles
 keep their ovals. Do not change `BIOMES[1].pal` for style:
 the city's ground colours stay as authored.

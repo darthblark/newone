@@ -25578,9 +25578,9 @@ function player3DDrawActor(actor, g = window, options = {}) {
       stance:{crouch:stance.crouch||0,prone:stance.prone||0,scaleX:stance.scaleX||1}};
     // Level 1: the model casts its own shadow, and standing in a building's
     // shadow shades the model. Both come back from one call so they agree.
-    const tint=target===window.drawingContext&&options.mode!=='BOXING'&&options.mode!=='QUICKDRAW'&&
+    const shade=target===window.drawingContext&&options.mode!=='BOXING'&&options.mode!=='QUICKDRAW'&&
       !options.skeleton&&typeof celFigureCast3D==='function'?celFigureCast3D(actor,snapshot,target,options):null;
-    if(Player3D.draw(snapshot,target,tint?{...options,view,tint}:{...options,view})!==true)return false;
+    if(Player3D.draw(snapshot,target,shade?{...options,view,shade}:{...options,view})!==true)return false;
     _player3DLiveSnapshots.set(actor,snapshot);
     return true;
   } catch (_) {
@@ -53133,8 +53133,7 @@ const CEL_CAST_COLOR = [24 / 255, 24 / 255, 68 / 255];
 const CEL_CAST_TINT = [0.66, 0.68, 0.86];
 const _celCast = { matrix: new Float32Array(16), color: CEL_CAST_COLOR };
 const _celCastOpts = { cast: _celCast, view: false, outline: false, resolutionScale: 0.5,
-  includeParts: undefined, excludeParts: undefined };
-const _celTint = [1, 1, 1];
+  includeParts: undefined, excludeParts: undefined, shade: null };
 function _celCastAffine(m, fn) {
   // Build a 4x4 from an affine map of (x, y, z) by probing its basis.
   fn(0, 0, 0); const ox = _cfsP.x, oy = _cfsP.y;
@@ -53144,38 +53143,77 @@ function _celCastAffine(m, fn) {
   m[0] = ax; m[1] = ay; m[2] = 0; m[3] = 0;  m[4] = bx; m[5] = by; m[6] = 0; m[7] = 0;
   m[8] = cx; m[9] = cy; m[10] = 1; m[11] = 0; m[12] = ox; m[13] = oy; m[14] = 0; m[15] = 1;
 }
+// The nearest building boxes, in the actor's own frame, for Player3D's
+// per-fragment shadow test. One descriptor is reused; Player3D reads it during
+// the draw it is passed to and keeps no reference.
+const _celShadeDesc = { boxes: new Float32Array(16), tops: new Float32Array(4), dir: [1, 1, 1],
+  tint: [1, 1, 1], soft: 5 };
+function celFigureShadeBoxes(actor, T, sW, k, day) {
+  // The fragment test is axis-aligned, so it needs an unrotated actor frame.
+  if (Math.abs(T.b) > 1e-4 * Math.abs(T.a) || Math.abs(T.c) > 1e-4 * Math.abs(T.d)) return null;
+  const list = _celShadeGather(actor.x, actor.y, k * 46);
+  if (!list.length) return null;
+  const d = _celShadeDesc, sL = Math.abs(T.a) / sW, zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
+  if (!(sL > 0)) return null;
+  // Nearest four by distance to the footprint.
+  let n = 0;
+  for (let pick = 0; pick < 4; pick++) {
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!b) continue;
+      const dx = Math.max(Math.abs(actor.x - b.x) - b.w / 2, 0), dy = Math.max(Math.abs(actor.y - b.y) - b.h / 2, 0);
+      const q = dx * dx + dy * dy;
+      if (q < bd) { bd = q; best = i; }
+    }
+    if (best < 0) break;
+    const b = list[best]; list[best] = null;
+    d.boxes[n * 4]     = (b.x - b.w / 2 - actor.x) / sL; d.boxes[n * 4 + 1] = (b.y - b.h / 2 - actor.y) / sL;
+    d.boxes[n * 4 + 2] = (b.x + b.w / 2 - actor.x) / sL; d.boxes[n * 4 + 3] = (b.y + b.h / 2 - actor.y) / sL;
+    d.tops[n] = _celShadeHeight(b) / zs;
+    n++;
+  }
+  for (let i = n; i < 4; i++) d.tops[i] = -1e6;
+  // Toward the sun. Neither ground component may be exactly zero: the shader
+  // divides by them.
+  const ux = -LIGHT_DX, uy = -LIGHT_DY;
+  d.dir[0] = Math.abs(ux) < 1e-3 ? 1e-3 : ux; d.dir[1] = Math.abs(uy) < 1e-3 ? 1e-3 : uy;
+  d.dir[2] = sL / (k * zs);
+  d.soft = 5 / sL;
+  d.tint[0] = 1 + (CEL_CAST_TINT[0] - 1) * day; d.tint[1] = 1 + (CEL_CAST_TINT[1] - 1) * day;
+  d.tint[2] = 1 + (CEL_CAST_TINT[2] - 1) * day;
+  return d;
+}
 function celFigureCast3D(actor, snapshot, ctx, options) {
   if (!celCityScene() || actor.isCorpse || typeof ctx.getTransform !== 'function') return null;
   const day = Math.min(1, shadowDensity() * 3.2);
   if (!(day > 0.01)) return null;
-  const shade = celFigureShade(actor);
-  const A = celShadowAlpha() * (1 - shade.feet);
+  const A = celShadowAlpha();
   const k = shadowLengthScale() * CEL_SHADOW_REACH;
+  const T = ctx.getTransform(), det = T.a * T.d - T.b * T.c;
+  const sW = zoom * (typeof pixelDensity === 'function' ? pixelDensity() : 1);
+  if (!(Math.abs(det) > 1e-9) || !(sW > 0)) return null;
+  const shade = celFigureShadeBoxes(actor, T, sW, k, day);
   if (A > 0.01) {
     // The sun's ground throw, brought into whatever frame the actor is being
     // drawn in (it may be scaled, and some pose paths arrive rotated).
-    const T = ctx.getTransform(), det = T.a * T.d - T.b * T.c;
-    const sW = zoom * (typeof pixelDensity === 'function' ? pixelDensity() : 1);
-    if (Math.abs(det) > 1e-9 && sW > 0) {
-      const zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
-      const wx = LIGHT_DX * k * zs * sW, wy = LIGHT_DY * k * zs * sW;
-      const vx = (T.d * wx - T.c * wy) / det, vy = (-T.b * wx + T.a * wy) / det;
-      const m = _celCast.matrix;
-      m[0] = 1; m[1] = 0; m[2] = 0; m[3] = 0; m[4] = 0; m[5] = 1; m[6] = 0; m[7] = 0;
-      m[8] = vx; m[9] = vy; m[10] = 1; m[11] = 0; m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
-      _celCastOpts.includeParts = options.includeParts; _celCastOpts.excludeParts = options.excludeParts;
-      _celCastOpts.resolutionScale = 0.4;
-      const ga = ctx.globalAlpha;
-      ctx.globalAlpha = ga * A;
-      try { Player3D.draw(snapshot, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; }
-      if (_depthOn) celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
-    }
+    const zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
+    const wx = LIGHT_DX * k * zs * sW, wy = LIGHT_DY * k * zs * sW;
+    const vx = (T.d * wx - T.c * wy) / det, vy = (-T.b * wx + T.a * wy) / det;
+    const m = _celCast.matrix;
+    m[0] = 1; m[1] = 0; m[2] = 0; m[3] = 0; m[4] = 0; m[5] = 1; m[6] = 0; m[7] = 0;
+    m[8] = vx; m[9] = vy; m[10] = 1; m[11] = 0; m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
+    _celCastOpts.includeParts = options.includeParts; _celCastOpts.excludeParts = options.excludeParts;
+    _celCastOpts.resolutionScale = 0.4;
+    // Where the shadow would land inside a building's shadow it is dropped,
+    // fragment by fragment, so the rest of it stays on the sunlit ground.
+    _celCastOpts.shade = shade;
+    const ga = ctx.globalAlpha;
+    ctx.globalAlpha = ga * A;
+    try { Player3D.draw(snapshot, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; _celCastOpts.shade = null; }
+    if (_depthOn) celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
   }
-  const s = shade.body * day;
-  if (!(s > 0.01)) return null;
-  _celTint[0] = 1 + (CEL_CAST_TINT[0] - 1) * s; _celTint[1] = 1 + (CEL_CAST_TINT[1] - 1) * s;
-  _celTint[2] = 1 + (CEL_CAST_TINT[2] - 1) * s;
-  return _celTint;
+  return shade;
 }
 // True when the Blender model, not the capsule skeleton, will cast for this
 // figure on this frame.
@@ -68834,9 +68872,11 @@ uniform vec2 uDepth;
 uniform vec4 uView;
 uniform float uOutline;
 out vec3 vNormal;
+out vec3 vPos;
 void main() {
   vec3 n = normalize(uNormal * aNormal);
   vec3 p = (uModel * vec4(aPosition, 1.0)).xyz + n * uOutline;
+  vPos = p;
   float h = (p.z-uView.w)*uView.z;
   float w = 1.0-h;
   vec2 numerator = p.xy+uView.xy*h;
@@ -68858,14 +68898,51 @@ uniform float uShadeContrast;
 uniform float uInk;
 uniform float uAlpha;
 uniform vec3 uTint;
+// Building shadows, tested per fragment. Each box is a footprint in the
+// actor's own frame with a roof height in model units; uShadeDir walks from
+// the fragment toward the sun (xy a unit step along the ground, z the height
+// the ray gains over that step). A fragment is shaded when its ray enters a
+// box before it has climbed over the roof, so a figure half inside a shadow
+// is half shaded, along the shadow's real edge. uShadeGround = 1 tests the
+// ground point instead and is used by the cast pass to drop the part of a
+// figure's own shadow that lands inside a building's.
+uniform vec4 uShadeBox[4];
+uniform float uShadeTop[4];
+uniform vec3 uShadeDir;
+uniform float uShadeSoft;
+uniform float uShadeGround;
+in vec3 vPos;
 out vec4 oColor;
+float shadeAt(vec3 P) {
+  float s = 0.0;
+  vec2 inv = 1.0 / uShadeDir.xy;
+  vec2 across = vec2(-uShadeDir.y, uShadeDir.x);
+  float w = dot(P.xy, across);
+  for (int i = 0; i < 4; i++) {
+    float tmax = (uShadeTop[i] - P.z) / uShadeDir.z;
+    if (tmax <= 0.0) continue;
+    vec4 b = uShadeBox[i];
+    vec2 a = (b.xy - P.xy) * inv, c = (b.zw - P.xy) * inv;
+    vec2 lo = min(a, c), hi = max(a, c);
+    float t0 = max(max(lo.x, lo.y), 0.0), t1 = min(min(hi.x, hi.y), tmax);
+    // Soft along the ray, and soft across it: how far inside the shadow's
+    // side edges this fragment sits.
+    vec2 mid = (b.xy + b.zw) * 0.5, half2 = (b.zw - b.xy) * 0.5;
+    float reach = abs(across.x) * half2.x + abs(across.y) * half2.y;
+    float side = (reach - abs(w - dot(mid, across))) / uShadeSoft + 0.5;
+    s = max(s, clamp((t1 - t0) / uShadeSoft, 0.0, 1.0) * clamp(side, 0.0, 1.0));
+  }
+  return s;
+}
 void main() {
+  float sh = shadeAt(vec3(vPos.xy, vPos.z * (1.0 - uShadeGround)));
   float diffuse = dot(normalize(vNormal), uLight)*0.5+0.5;
   float shade = diffuse < uThresholds.x ? uBands.x :
     diffuse < uThresholds.y ? uBands.y : uBands.z;
   shade = mix(1.0, shade, uShadeContrast);
-  vec3 color = mix(uColor*shade*uTint, vec3(0.055,0.045,0.055)*uTint, uInk);
-  oColor = vec4(color, uAlpha);
+  vec3 tint = mix(vec3(1.0), uTint, sh * (1.0 - uShadeGround));
+  vec3 color = mix(uColor*shade, vec3(0.055,0.045,0.055), uInk) * tint;
+  oColor = vec4(color, uAlpha * (1.0 - sh * uShadeGround));
 }`;
   const stats = { draws:0, meshUploads:0, triangles:0, gpuDrawCalls:0,
     contextLosses:0, contextRestores:0, resizes:0, failures:0,
@@ -69142,7 +69219,7 @@ void main() {
       gl.linkProgram(program);gl.deleteShader(vertex);gl.deleteShader(fragment);
       if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program)||'Player shader link failed');
       stats.programCreates++;uniforms={};
-      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint'])
+      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint','uShadeBox','uShadeTop','uShadeDir','uShadeSoft','uShadeGround'])
         uniforms[name]=gl.getUniformLocation(program,name);
       pipeline.stage='initialization';
       for(const name of Object.keys(asset.meshes)) {
@@ -69208,7 +69285,7 @@ void main() {
   // dropped along the sun to the ground, or folded up a wall. It is the actor's
   // real geometry in its real pose, so the shadow cannot disagree with the
   // figure. Painted as one flat colour; the caller owns alpha and softness.
-  const castScratch=new Float32Array(16);
+  const castScratch=new Float32Array(16),noShadeTops=new Float32Array([-1e6,-1e6,-1e6,-1e6]);
   function castMatrix(c,m) {
     const o=castScratch;
     for(let col=0;col<4;col++) {
@@ -69393,8 +69470,16 @@ void main() {
       gl.uniform4f(uniforms.uBounds,x,y,1/w,1/h);
       gl.uniform2f(uniforms.uDepth,minZ,1/Math.max(.1,maxZ-minZ));
       gl.uniform4f(uniforms.uView,view.offsetX,view.offsetY,view.invH,view.pivotZ);
-      const cast=options.cast||null,tint=options.tint;
-      gl.uniform3f(uniforms.uTint,tint&&!cast?tint[0]:1,tint&&!cast?tint[1]:1,tint&&!cast?tint[2]:1);
+      const cast=options.cast||null,shade=options.shade||null;
+      if(shade) {
+        gl.uniform3f(uniforms.uTint,shade.tint[0],shade.tint[1],shade.tint[2]);
+        gl.uniform4fv(uniforms.uShadeBox,shade.boxes);gl.uniform1fv(uniforms.uShadeTop,shade.tops);
+        gl.uniform3f(uniforms.uShadeDir,shade.dir[0],shade.dir[1],shade.dir[2]);
+        gl.uniform1f(uniforms.uShadeSoft,shade.soft);gl.uniform1f(uniforms.uShadeGround,cast?1:0);
+      } else {
+        gl.uniform3f(uniforms.uTint,1,1,1);gl.uniform1fv(uniforms.uShadeTop,noShadeTops);
+        gl.uniform3f(uniforms.uShadeDir,1,1,1);gl.uniform1f(uniforms.uShadeSoft,1);gl.uniform1f(uniforms.uShadeGround,0);
+      }
       const light=sampleLighting(snapshot,transform,options.lighting);
       gl.uniform3fv(uniforms.uLight,light.direction);
       gl.uniform1f(uniforms.uShadeContrast,cast?0:light.contrast);

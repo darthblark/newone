@@ -42,12 +42,15 @@ Morning light across a courtyard district:
   - Figures the model does not draw (prone or stunned enemies, civilians)
     fall back to `celFigureSkeleton()`, a capsule set blended across
     standing, crouch, prone and knockdown, with layered soft fills.
-- **Building shadows shade figures.** `celFigureShade()` tests the sun ray
-  from a figure against nearby building footprints and heights. In shade the
-  model is tinted through a `uTint` uniform and its own cast shadow fades
-  out ([preview](previews/level1-figure-shade.png)). Five samples with a
-  short ramp make the edge a fade. Canvas-painted figures and held-weapon
-  overlays are not tinted.
+- **Building shadows shade figures, part by part.** `celFigureShadeBoxes()`
+  hands Player3D the four nearest building footprints and roof heights in the
+  actor's frame. The fragment shader walks each fragment's ray toward the sun
+  and shades it only if the ray enters a box below its roof, so a figure
+  crossing a shadow edge is darkened up to that edge and no further
+  ([preview](previews/level1-figure-shade.png)). The cast pass runs the same
+  test at the ground point and drops only the part of the figure's own shadow
+  that lands inside a building's. Edges ramp over about five units. Figures the
+  model does not draw use `celFigureShade()`, a whole-figure fade.
 - **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
   material colours are saturated once per building plan (`vivid`).
 
