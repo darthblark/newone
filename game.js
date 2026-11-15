@@ -48949,6 +48949,9 @@ function withBakedSun(fn) {
 const BUILDING_RISE_MAX   = 26;
 const BUILDING_SHADOW_MAX = 24;
 const BUILDING_GAP_MIN    = 90;
+// Level 1's block heights: two, three and four storeys. See buildingRise().
+const CITY_RISE_STOREY = [27, 33, 39];
+const CITY_RISE_TOP    = 40;
 
 // Deterministic per-building mass, hashed off the footprint's world position so
 // it is identical every time the chunk loads and across sessions. One function,
@@ -49040,6 +49043,30 @@ function buildingRise(b) {
   // proportion was right; the ceiling was the bug.
   const cap = Math.max(BUILDING_RISE_MAX, Math.min(foot * 0.075, 42));
   b._rise = Math.min(cap, 5 + foot * 0.075 + r01 * foot * 0.09);
+  // STICK CITY IS BUILT IN STOREYS, NOT AT ONE HEIGHT.
+  //
+  // Through the formula above nearly every block building in the city came out
+  // between 17 and 26, so the whole skyline was one flat shelf -- and a figure
+  // casts as 21 units tall, so people stood about as high as the offices they
+  // walked past and threw shadows nearly as long. Level 1 sorts its blocks into
+  // two, three and four storeys instead: taller walls for the lean to show,
+  // shadows that are visibly a building's rather than a person's, and a
+  // skyline with steps in it.
+  //
+  // The ceiling is still the alley. CITY_RISE_TOP * (MASS_LEAN + MASS_TILT) is
+  // 85, inside BUILDING_GAP_MIN, so a tall block's wall still cannot reach the
+  // block beside it; and a narrow footprint is held to a share of its own
+  // width, because a lean longer than the thing leaning is a slab that fell
+  // over. Nothing is ever made LOWER than it was, a preset _rise never gets
+  // here, and warehouses stay sheds.
+  if (typeof currentLevel !== 'undefined' && currentLevel === 1 && currentBiome === 1 &&
+      b.isBlockBuilding && !b.isBiomeProp && !b.isLandmark && !b.isHouse && !b.isBuiltStructure) {
+    const shed = b.cityArchitecture === 4 || (b.cityArchitecture === undefined && b.style === 3);
+    const tier = shed ? 0 : r01 < 0.42 ? 0 : r01 < 0.78 ? 1 : 2;
+    const jitter = ((h >>> 7) & 255) / 255 * 3 - 1.5;
+    const want = CITY_RISE_STOREY[tier] + jitter;
+    b._rise = Math.max(b._rise, Math.min(CITY_RISE_TOP, foot * 0.28, want));
+  }
   // A few things are not sized by their footprint at all. A lamp post stands on
   // a 16-unit plate and reaches four metres; the generic formula gives it a
   // rise of six, so its head was displaced by nine pixels and the whole thing
@@ -53416,7 +53443,11 @@ const _shLean = [0, 0];
 // Ground throw per unit of height, before shadowLengthScale(). Above one on
 // purpose: these masses are held to a modest rise so their walls stay out of
 // the street, and the shadow is where the rest of their height is told.
-const CEL_SHADOW_REACH = 2.3;
+// 2.0, down from 2.3 when the city's blocks went from one height to storeys:
+// a four-storey block at 2.3 put most of a street in shade all morning. A
+// figure's shadow shortens by the same eighth, which is what finally makes a
+// building's shadow read as longer than a person's.
+const CEL_SHADOW_REACH = 2.0;
 // THE SHADOW'S COLOUR IS THE GAME'S OWN. Every shadow here was always the
 // biome's sky at about a third -- a dark neutral slate -- and the first comic
 // pass replaced that with a saturated indigo, which read as blue paint on the
@@ -70306,7 +70337,10 @@ const CityBuildings3D = (() => {
   }
   function addFacadeFaces(plan,b) {
     const x0=b.x-b.w/2,x1=b.x+b.w/2,y0=b.y-b.h/2,y1=b.y+b.h/2,r=plan.rise;
-    const storeys=plan.profile==='quay_warehouse'?1:Math.min(3,Math.max(2,b.cityStoreys||2));
+    // A taller wall carries another row of windows rather than taller ones:
+    // the rows are what say how many floors a building has.
+    const storeys=plan.profile==='quay_warehouse'?1:
+      Math.min(4,Math.max(2,b.cityStoreys||2,r>=37.5?4:r>=31.5?3:2));
     const canal=typeof cityHasCanal==='function'&&cityHasCanal(1,Math.floor(b.y/CHUNK_W));
     const front=canal?(b.y<cityCanalY(1,Math.floor(b.y/CHUNK_W),b.x)?1:-1):
       ((Math.abs(Math.floor(b.x/120)+Math.floor(b.y/120))%2)?1:-1);

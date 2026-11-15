@@ -60,6 +60,19 @@ Morning light across a courtyard district:
   - `_celShadeHeight()` is the height the painted shadow is thrown from: the
     highest level running round all four sides of the roof (parapet or eave),
     found once per plan by `_celPlanEdgeHeight()`.
+- **Buildings stand in storeys.** Through the generic formula nearly every
+  block in the city was 17 to 26 units tall: one flat shelf, about as high as
+  the figures walking past it, with shadows barely longer than theirs. In
+  Level 1 `buildingRise()` now sorts block buildings into two, three and four
+  storeys (`CITY_RISE_STOREY` 27 / 33 / 39, with a little jitter), capped at
+  `CITY_RISE_TOP` (40) and at 28% of the footprint so a narrow building does
+  not lean further than it is wide. Nothing is made lower than it was, a
+  preset `_rise` is untouched and warehouses stay low. 40 through the lean is
+  85 units, inside `BUILDING_GAP_MIN`, so a tall wall still cannot reach its
+  neighbour. The roof kit's facade carries one row of windows per storey (up
+  to four), and `CEL_SHADOW_REACH` came down from 2.3 to 2.0 so the taller
+  blocks do not put a whole street in shade
+  ([before / after](previews/level1-storeys-before-after.png)).
 - **Shadow colour.** Shadows use the game's original sky-derived tone
   (`celShadowRGB()`, the biome sky at about a third), not the indigo the first
   version of this pass introduced. Only their strength and shape are new.

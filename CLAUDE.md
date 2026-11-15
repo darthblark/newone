@@ -3841,6 +3841,12 @@ The test is made where the pixel lands on the ground, never at the body part's
 height: a figure casts as 21 units tall and small blocks are 17 to 26, so a
 true 3D test left figures fully lit inside most shadows. `_celShadeHeight()`
 must stay the height the painted shadow is thrown from (the roof's perimeter).
+Level 1's block buildings stand in storeys: `buildingRise()` sorts them into
+`CITY_RISE_STOREY` (27/33/39, capped at `CITY_RISE_TOP` and at 28% of the
+footprint, never lower than the generic formula, preset `_rise` untouched) so
+they are taller than the people beside them and the skyline has steps. The top
+still clears `BUILDING_GAP_MIN` through the lean. The roof kit's facade adds a
+row of windows per storey, and `CEL_SHADOW_REACH` is 2.0 to match.
 Do not go back to a whole-figure tint or fade for model-drawn figures. Every
 Level 1 shadow takes its colour from `celShadowRGB()` (the sky-derived slate
 the game always used); do not hard-code a hue. Airborne units, beasts and vehicles
