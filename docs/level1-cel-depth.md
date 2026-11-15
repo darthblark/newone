@@ -43,14 +43,23 @@ Morning light across a courtyard district:
     fall back to `celFigureSkeleton()`, a capsule set blended across
     standing, crouch, prone and knockdown, with layered soft fills.
 - **Building shadows shade figures, part by part.** `celFigureShadeBoxes()`
-  hands Player3D the four nearest building footprints and roof heights in the
-  actor's frame. The fragment shader walks each fragment's ray toward the sun
-  and shades it only if the ray enters a box below its roof, so a figure
-  crossing a shadow edge is darkened up to that edge and no further
+  hands Player3D the four nearest building footprints and shadow heights in
+  the actor's frame. The fragment shader takes the ground point each fragment
+  is drawn over, walks its ray toward the sun and shades it if the ray enters
+  a box below that height -- which is exactly the region the building's shadow
+  is painted on. A figure crossing a shadow edge is therefore darkened up to
+  the painted edge and no further
   ([preview](previews/level1-figure-shade.png)). The cast pass runs the same
-  test at the ground point and drops only the part of the figure's own shadow
-  that lands inside a building's. Edges ramp over about five units. Figures the
-  model does not draw use `celFigureShade()`, a whole-figure fade.
+  test and drops only the part of the figure's own shadow that lands inside a
+  building's. Edges ramp over about five units, centred on the painted edge.
+  Figures the model does not draw use `celFigureShade()`, a whole-figure fade.
+  - The test is deliberately made on the ground, not at the height of the body
+    part. Heights here are not one scale: a figure casts as 21 units tall and
+    a small office block is 17 to 26, so the true 3D test put a figure's head
+    and shoulders above most shadows and it stood fully lit inside them.
+  - `_celShadeHeight()` is the height the painted shadow is thrown from: the
+    highest level running round all four sides of the roof (parapet or eave),
+    found once per plan by `_celPlanEdgeHeight()`.
 - **Shadow colour.** Shadows use the game's original sky-derived tone
   (`celShadowRGB()`, the biome sky at about a third), not the indigo the first
   version of this pass introduced. Only their strength and shape are new.

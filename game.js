@@ -53075,11 +53075,38 @@ function _celShadeGather(x, y, reach) {
   }
   return list;
 }
+// The height a building's PAINTED shadow is thrown from. A roof-kit building
+// paints its real roof, and the long straight edges of that shadow come off
+// the top of its perimeter -- the parapet or the eave -- so that is the height
+// the figure test has to use, or the shade on a figure stops somewhere the
+// shadow on the road does not. It is the highest level that runs round all
+// four sides; a gable end or a chimney stands on one or two. Found once per
+// plan.
+function _celPlanEdgeHeight(p, rise) {
+  const sides = new Map();
+  for (const f of p.faces) {
+    if (f.kind === 'facade') continue;
+    for (const v of f.points) {
+      if (!(v[2] > 1)) continue;
+      const m = (Math.abs(v[0] - (p.x - p.w / 2)) < 1.5 ? 1 : 0) | (Math.abs(v[0] - (p.x + p.w / 2)) < 1.5 ? 2 : 0) |
+        (Math.abs(v[1] - (p.y - p.h / 2)) < 1.5 ? 4 : 0) | (Math.abs(v[1] - (p.y + p.h / 2)) < 1.5 ? 8 : 0);
+      if (!m) continue;
+      const z = Math.round(v[2] * 2) / 2;
+      sides.set(z, (sides.get(z) || 0) | m);
+    }
+  }
+  let best = 0;
+  for (const [z, m] of sides) if (m === 15 && z > best) best = z;
+  return best > 0 ? best : rise;
+}
 function _celShadeHeight(b) {
   const rise = buildingRise(b);
   if (typeof CityBuildings3D !== 'undefined' && CityBuildings3D.profile(b)) {
     const p = CityBuildings3D.plan(b);
-    if (p) return rise + (p.maxZ - rise) * 0.45;
+    if (p) {
+      if (!(p.shadeZ > 0)) p.shadeZ = _celPlanEdgeHeight(p, rise);
+      return p.shadeZ;
+    }
   }
   return Math.min(84, Math.max(rise, Math.min(b.w, b.h) * 0.10));
 }
@@ -68947,12 +68974,22 @@ uniform float uAlpha;
 uniform vec3 uTint;
 // Building shadows, tested per fragment. Each box is a footprint in the
 // actor's own frame with a roof height in model units; uShadeDir walks from
-// the fragment toward the sun (xy a unit step along the ground, z the height
-// the ray gains over that step). A fragment is shaded when its ray enters a
-// box before it has climbed over the roof, so a figure half inside a shadow
-// is half shaded, along the shadow's real edge. uShadeGround = 1 tests the
-// ground point instead and is used by the cast pass to drop the part of a
-// figure's own shadow that lands inside a building's.
+// a ground point toward the sun (xy a unit step along the ground, z the
+// height the ray gains over that step). A ground point is shaded when its ray
+// enters a box before it has climbed over the roof, which is exactly the
+// region the building's shadow is PAINTED on.
+//
+// THE TEST IS MADE WHERE THE PIXEL LANDS ON THE GROUND, NOT AT THE HEIGHT OF
+// THE BODY PART IT SHOWS. It used to be the true 3D test, and the heights are
+// not a real scale: a figure casts as 21 units tall and a small office block
+// is 17 to 26, so a figure's head and shoulders -- all this camera ever sees
+// of it -- were "above" most shadows in the city and it stood fully lit in the
+// middle of them. A figure is not leaned, so each of its pixels is drawn on
+// the ground it stands on, and what reads right from above is the old rule:
+// the part of the figure over the painted shadow is the part that is dark.
+// uShadeGround = 1 is the cast pass, which drops the part of a figure's own
+// shadow that lands inside a building's instead of tinting it.
+uniform vec4 uView;
 uniform vec4 uShadeBox[4];
 uniform float uShadeTop[4];
 uniform vec3 uShadeDir;
@@ -68960,16 +68997,16 @@ uniform float uShadeSoft;
 uniform float uShadeGround;
 in vec3 vPos;
 out vec4 oColor;
-float shadeAt(vec3 P) {
+float shadeAt(vec2 P) {
   float s = 0.0;
   vec2 inv = 1.0 / uShadeDir.xy;
   vec2 across = vec2(-uShadeDir.y, uShadeDir.x);
-  float w = dot(P.xy, across);
+  float w = dot(P, across);
   for (int i = 0; i < 4; i++) {
-    float tmax = (uShadeTop[i] - P.z) / uShadeDir.z;
+    float tmax = uShadeTop[i] / uShadeDir.z;
     if (tmax <= 0.0) continue;
     vec4 b = uShadeBox[i];
-    vec2 a = (b.xy - P.xy) * inv, c = (b.zw - P.xy) * inv;
+    vec2 a = (b.xy - P) * inv, c = (b.zw - P) * inv;
     vec2 lo = min(a, c), hi = max(a, c);
     float t0 = max(max(lo.x, lo.y), 0.0), t1 = min(min(hi.x, hi.y), tmax);
     // Soft along the ray, and soft across it: how far inside the shadow's
@@ -68977,12 +69014,18 @@ float shadeAt(vec3 P) {
     vec2 mid = (b.xy + b.zw) * 0.5, half2 = (b.zw - b.xy) * 0.5;
     float reach = abs(across.x) * half2.x + abs(across.y) * half2.y;
     float side = (reach - abs(w - dot(mid, across))) / uShadeSoft + 0.5;
-    s = max(s, clamp((t1 - t0) / uShadeSoft, 0.0, 1.0) * clamp(side, 0.0, 1.0));
+    // Both ramps are centred on the painted edge, so the figure is half
+    // shaded exactly where the ground's own shadow stops.
+    s = max(s, clamp((t1 - t0) / uShadeSoft + 0.5, 0.0, 1.0) * clamp(side, 0.0, 1.0));
   }
   return s;
 }
 void main() {
-  float sh = shadeAt(vec3(vPos.xy, vPos.z * (1.0 - uShadeGround)));
+  // Where this fragment is drawn, back in the actor's ground frame: the same
+  // projection the vertex shader applies, so the edge of the shade on a
+  // figure runs straight on from the edge of the shadow on the road.
+  float vh = (vPos.z - uView.w) * uView.z;
+  float sh = shadeAt((vPos.xy + uView.xy * vh) / (1.0 - vh));
   float diffuse = dot(normalize(vNormal), uLight)*0.5+0.5;
   float shade = diffuse < uThresholds.x ? uBands.x :
     diffuse < uThresholds.y ? uBands.y : uBands.z;

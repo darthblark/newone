@@ -3834,9 +3834,13 @@ fold queued for `celFigureWallFlush()`), at low resolution with four offset
 taps for the soft edge. `celFigureModelCasts()` decides whether the model or
 the `celFigureSkeleton()` capsule fallback owns a figure's shadow; never draw
 both. Building shadows shade figures per fragment: `celFigureShadeBoxes()`
-passes nearby footprints and roof heights to the Player3D shader (`uShadeBox`,
-`uShadeTop`, `uShadeDir`), which tints only fragments whose sun ray enters a
-box, and in the cast pass drops only the shadow that lands in building shade.
+passes nearby footprints and shadow heights to the Player3D shader (`uShadeBox`,
+`uShadeTop`, `uShadeDir`), which tints the fragments drawn over the painted
+shadow, and in the cast pass drops only the shadow that lands in building shade.
+The test is made where the pixel lands on the ground, never at the body part's
+height: a figure casts as 21 units tall and small blocks are 17 to 26, so a
+true 3D test left figures fully lit inside most shadows. `_celShadeHeight()`
+must stay the height the painted shadow is thrown from (the roof's perimeter).
 Do not go back to a whole-figure tint or fade for model-drawn figures. Every
 Level 1 shadow takes its colour from `celShadowRGB()` (the sky-derived slate
 the game always used); do not hard-code a hue. Airborne units, beasts and vehicles
