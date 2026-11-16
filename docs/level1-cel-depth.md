@@ -73,6 +73,34 @@ Morning light across a courtyard district:
   to four), and `CEL_SHADOW_REACH` came down from 2.3 to 2.0 so the taller
   blocks do not put a whole street in shade
   ([before / after](previews/level1-storeys-before-after.png)).
+- **Walls, then the street, then roofs.** A building used to be one entry in
+  the depth sort, keyed on its south edge, so it was either wholly under a
+  figure or wholly over them. Somebody pressed against a south wall sorted
+  after the building, and since a figure is wider than its collision circle
+  their hands and gun were painted on top of the roof. Somebody beside a wall
+  the lean turns toward the camera sorted before it and was cut in half by
+  that wall. A wall is only drawn when it faces the camera, so a figure
+  overlapping it is always in front of it; a roof is above every head, so a
+  figure overlapping it is always under it. In Level 1 `drawDepthSorted()`
+  therefore paints every split building's walls and facade first, then the
+  ordinary sorted pass, then the roofs
+  ([before / after](previews/level1-roof-order-before-after.png)).
+  - `_massPart` selects the part (0 whole, 1 walls, 2 roof).
+    `CityBuildings3D.draw(b, g, part, edge)` and the generic block branch of
+    `drawBuildings()` are the two painters that honour it, and they set
+    `_splitMass` on the records they draw, so nothing drawn by any other
+    branch can be split by mistake. A building is whole on the first frame it
+    is seen and split from the second.
+  - Wall blood and wall corpses go down with the walls only.
+  - The roof's edge line over a figure is a stroke, and strokes are the
+    expensive kind of drawing: laid on every roof it added about a third to
+    the pass. It is drawn only on roofs with a figure inside the reach of
+    their lean (`_roofEdge`), which measured back at the old cost.
+  - A figure's shadow on the wall of a split building is painted as soon as it
+    is queued (`celFigureWallFlushNow()`), so it lies under the figure that
+    casts it.
+  - Other levels keep the one-piece order. `tools/check-depth.js` asserts the
+    schedule in both.
 - **Shadow colour.** Shadows use the game's original sky-derived tone
   (`celShadowRGB()`, the biome sky at about a third), not the indigo the first
   version of this pass introduced. Only their strength and shape are new.

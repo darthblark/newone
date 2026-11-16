@@ -790,5 +790,63 @@ ok('net zero over every prop the biome produces', probe('__depth') === 0,
 ok('and it never pops past where it started', probe('__minDepth') === 0,
    'lowest ' + probe('__minDepth'));
 
+// -- Level 1: a block building is its walls, then the street, then its roof --
+//
+// Sorted as one piece, a building is wholly under a figure or wholly over them:
+// somebody against its south wall was painted over the roof, and somebody
+// beside a wall the lean shows was cut in half by it. A wall faces the camera
+// or is not drawn, so a figure overlapping it is in front; a roof is above
+// every head, so a figure overlapping it is underneath. What is asserted is the
+// schedule, with the two painters replaced by a recorder that also notes which
+// part it was asked for.
+{
+  const r = P(`(() => {
+    const realDB = drawBuildings, lv = currentLevel, bm = currentBiome, ba = BIOME_ACTIVE;
+    const log = [];
+    drawBuildings = function (arr, i0, i1) {
+      for (let i = i0; i < i1; i++) log.push('M' + arr[i].id + (_massPart ? ':' + _massPart : ''));
+    };
+    let after = '';
+    try {
+      currentLevel = 1; currentBiome = 1; BIOME_ACTIVE = true;
+      viewLeft = -5000; viewRight = 5000; viewTop = -5000; viewBottom = 5000;
+      const block = { id: 1, x: 0, y: 0, w: 200, h: 200, isBlockBuilding: true, _splitMass: true };
+      const plain = { id: 2, x: 600, y: 0, w: 200, h: 200 };
+      const fresh = { id: 3, x: -600, y: 0, w: 200, h: 200, isBlockBuilding: true };
+      activeBuildings = [block, plain, fresh];
+      const actor = (id, y) => ({ id: id, x: 0, y: y, show: function () { log.push('A' + id); } });
+      _depthActors = [actor(1, 400), actor(2, -400)];
+      _depthOn = true;
+      drawDepthSorted();
+      after = _massPart + '/' + _depthSplitOn;
+      // Any other level keeps the one-piece order.
+      log.push('|');
+      currentLevel = 2; currentBiome = 2;
+      _depthActors = [actor(1, 400), actor(2, -400)];
+      _depthOn = true;
+      drawDepthSorted();
+    } finally {
+      drawBuildings = realDB; currentLevel = lv; currentBiome = bm; BIOME_ACTIVE = ba;
+      activeBuildings = []; _depthActors.length = 0; _depthOn = false;
+    }
+    return { log: log.join(' '), after: after };
+  })()`);
+  const [city, other] = r.log.split(' | ').map(t => t.split(' '));
+  const at = (list, k) => list.indexOf(k);
+  ok('Level 1 paints a block building\'s walls before anybody in the street',
+     at(city, 'M1:1') === 0, r.log);
+  ok('and its roof after everybody, north of it or south',
+     at(city, 'M1:2') > at(city, 'A1') && at(city, 'M1:2') > at(city, 'A2') && at(city, 'M1:2') === city.length - 1, r.log);
+  ok('each part exactly once, and never the whole building as well',
+     city.filter(k => k === 'M1:1').length === 1 && city.filter(k => k === 'M1:2').length === 1 && at(city, 'M1') < 0, r.log);
+  ok('a mass no splitting painter has drawn keeps its place in the sort',
+     city.filter(k => k === 'M2').length === 1 && city.filter(k => k === 'M3').length === 1 &&
+     at(city, 'M2') > at(city, 'A2') && at(city, 'M2') < at(city, 'A1') &&
+     at(city, 'M3') > at(city, 'A2') && at(city, 'M3') < at(city, 'A1'), r.log);
+  ok('the pass leaves no part selected behind it', r.after === '0/false', r.after);
+  ok('and another level still draws the building in one piece',
+     other.filter(k => k === 'M1').length === 1 && other.every(k => k.indexOf(':') < 0), other.join(' '));
+}
+
 console.log('\n' + (checks - fails) + '/' + checks + ' checks passed');
 process.exit(fails ? 1 : 0);

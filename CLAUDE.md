@@ -3847,6 +3847,19 @@ footprint, never lower than the generic formula, preset `_rise` untouched) so
 they are taller than the people beside them and the skyline has steps. The top
 still clears `BUILDING_GAP_MIN` through the lean. The roof kit's facade adds a
 row of windows per storey, and `CEL_SHADOW_REACH` is 2.0 to match.
+A Level 1 block building is drawn in two parts, not sorted as one piece:
+`drawDepthSorted()` paints the walls of every split building first, then the
+sorted street (figures, props, other masses), then the roofs (`_massPart` 1
+and 2, honoured by `CityBuildings3D.draw()` and the generic block branch of
+`drawBuildings()`, which mark the records they can split with `_splitMass`).
+A wall is only drawn when it faces the camera, so whoever overlaps it stands in
+front; a roof is above every head, so whoever overlaps it is underneath. Sorted
+whole, a figure against a south wall was painted over the roof and one beside a
+showing wall was cut by it. The roof's own edge stroke is laid only on roofs a
+figure is near (`_roofEdge`): on every roof it cost a third of the pass. A
+figure's wall shadow for a split building is flushed at once
+(`celFigureWallFlushNow()`), under the figure. `check-depth.js` holds the
+schedule.
 Do not go back to a whole-figure tint or fade for model-drawn figures. Every
 Level 1 shadow takes its colour from `celShadowRGB()` (the sky-derived slate
 the game always used); do not hard-code a hue. Airborne units, beasts and vehicles

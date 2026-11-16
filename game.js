@@ -6065,6 +6065,34 @@ let _standDecor = [];       // reused; standing decor queued by drawDecor()
 
 function depthSortActive() { return BIOME_ACTIVE || currentLevel === 8 || currentLevel === 9; }
 
+// A BLOCK BUILDING IS TWO THINGS AT TWO DEPTHS, AND ONE SORT KEY CANNOT HOLD BOTH.
+//
+// Sorted as one piece on its south edge, a building is either wholly under a
+// figure or wholly over them. Somebody pressed against its south wall sorts
+// after it, so their hands and gun -- which reach past the wall line, because a
+// figure is wider than its collision circle -- were painted over the ROOF, and
+// the player stood on top of the building. Somebody beside a wall the lean
+// turns toward the camera sorts before it, so that wall was painted over them
+// and cut them in half.
+//
+// Both are the same mistake. A wall is a vertical face rising from the edge of
+// a footprint nobody can stand inside, and it is only drawn when it faces the
+// camera -- so whoever overlaps it on screen is standing in front of it, always.
+// A roof is above every head in the street, so whoever overlaps it is under
+// it, always. The order is therefore not a comparison at all: walls, then
+// everything that stands on the ground, then roofs.
+//
+// Level 1 only, and only for records that have been seen to take one of the
+// two painters that know how to draw half of themselves (_splitMass is set by
+// those painters, so a record drawn by any other branch can never be split
+// by mistake). Roofs never reach each other or another building's wall --
+// BUILDING_GAP_MIN is what guarantees it -- so they need no order against
+// anything but each other.
+let _massPart = 0;            // 0 the whole mass, 1 walls and facade, 2 roof
+const _depthRoofs = [];       // reused; this frame's split buildings, by depth
+let _depthSplitOn = false;    // true while the sorted pass has walls down and roofs pending
+let _depthWorldT = null;      // the world transform the sorted pass started in
+
 // A character's contact point is their origin. Everything else in the file
 // already treats it that way -- collision is a circle around it, the contact
 // shadow is drawn on it, and the deferred rig stamps their height ellipse
@@ -6256,6 +6284,9 @@ function drawMassRun(arr, i0, i1) {
 function drawDepthSorted() {
   const masses = _depthMasses;
   masses.length = 0;
+  const roofs = _depthRoofs;
+  roofs.length = 0;
+  const split = typeof celCityScene === 'function' && celCityScene();
   _sandbagDepthPieces.length = 0;
   _forestCrowns.length = 0;
   for (let i = 0; i < activeBuildings.length; i++) {
@@ -6288,6 +6319,7 @@ function drawDepthSorted() {
       continue;
     }
     b._depthKey = massDepth(b);
+    if (split && b._splitMass === true && b.isBlockBuilding) { roofs.push(b); continue; }
     masses.push(b);
   }
   // The walk and the stair treads stay in the ground pass. These two posts
@@ -6320,6 +6352,15 @@ function drawDepthSorted() {
 
   const actors = _depthActors;
   drawFrontierCanyonRailShadows(window);
+  // Walls first: nothing that stands on the ground is ever behind one.
+  if (roofs.length) {
+    if (roofs.length > 1) roofs.sort((p, q) => p._depthKey - q._depthKey);
+    _depthWorldT = typeof drawingContext !== 'undefined' && drawingContext &&
+      typeof drawingContext.getTransform === 'function' ? drawingContext.getTransform() : null;
+    _massPart = 1;
+    try { drawBuildings(roofs, 0, roofs.length); } finally { _massPart = 0; }
+    _depthSplitOn = true;
+  }
   drawGroundBodyActors(actors);
   for (let i = 0; i < actors.length; i++) {
     const actor=actors[i];let depth=actor.y;
@@ -6352,7 +6393,29 @@ function drawDepthSorted() {
     }
     if (mi < masses.length) drawMassRun(masses, mi, masses.length);
     celFigureWallFlush(Infinity);
+    // Roofs last: over everybody, and over the props that stand under an eave.
+    if (roofs.length) {
+      _depthSplitOn = false;
+      // A roof laid over a figure wants its own edge line laid over them too,
+      // and that line is a stroke -- which is the expensive kind of drawing:
+      // put on every roof it added a third to this whole pass. It is only ever
+      // seen where somebody is close enough to be under an eave, so only those
+      // roofs get it. The reach is the furthest a roof can lean plus the
+      // furthest a figure's gun can stick out.
+      for (let i = 0; i < roofs.length; i++) {
+        const b = roofs[i], pad = buildingRise(b) * (MASS_LEAN + MASS_TILT) + 46;
+        let near = false;
+        for (let j = 0; j < actors.length && !near; j++) {
+          const a = actors[j];
+          near = Math.abs(a.x - b.x) < b.w / 2 + pad && Math.abs(a.y - b.y) < b.h / 2 + pad;
+        }
+        b._roofEdge = near;
+      }
+      _massPart = 2;
+      try { drawBuildings(roofs, 0, roofs.length); } finally { _massPart = 0; }
+    }
   } finally {
+    _depthSplitOn = false; _massPart = 0;
     _cfsJobN = 0;
     _boxingFigurePass = previousBoxingPass;
     actors.length = 0;
@@ -7265,7 +7328,9 @@ function drawBuildings(list, i0, i1) {
     // canopy in the decor list is what you actually see; without this the
     // generic building branch drew a dark box under every tree in the wood.
     if (b.isTreeTrunk) continue;
-    _wallPaint = b;
+    // Blood and bodies on a wall belong to the wall, so they go down with it
+    // and not a second time with the roof.
+    _wallPaint = _massPart === 2 ? null : b;
     if (currentLevel===3 && b.frontierDesign) { drawFrontierArchitecture(b); continue; }
     if(b.undergroundGate)continue; // animated leaves and arch draw together after the mass pass
     if(b.undergroundWall){drawUndergroundWall(b);continue;}
@@ -9089,7 +9154,7 @@ function drawBuildings(list, i0, i1) {
         }
         pop(); continue;
     }
-    if(typeof CityBuildings3D!=='undefined'&&CityBuildings3D.draw(b))continue;
+    if(typeof CityBuildings3D!=='undefined'&&CityBuildings3D.draw(b,window,_massPart,b._roofEdge===true)){b._splitMass=true;continue;}
     let bM, bI;
     if (currentLevel === 1) { 
         if (b.style === 0) { bM = [160, 165, 170]; bI = [140, 145, 150]; } 
@@ -9138,8 +9203,14 @@ function drawBuildings(list, i0, i1) {
     const x1 = b.x + b.w / 2, y1 = b.y + b.h / 2;
 
     noStroke();
-    if (rise > 0) drawMassSides(x0, y0, x1, y1, lx, ly, bM[0], bM[1], bM[2], 26);
-    if (b.cityArchitecture !== undefined) drawCityFacades(b,lx,ly);
+    if (_massPart !== 2) {
+      if (rise > 0) drawMassSides(x0, y0, x1, y1, lx, ly, bM[0], bM[1], bM[2], 26);
+      if (b.cityArchitecture !== undefined) drawCityFacades(b,lx,ly);
+    }
+    // Walls above, roof below: this record can be drawn in two parts. See
+    // _massPart.
+    if (b.isBlockBuilding) b._splitMass = true;
+    if (_massPart === 1) continue;
 
     // Everything from here down is ROOF, so it rides up to the top of the
     // walls. Drawn in the footprint's own coordinates and translated, so none
@@ -53277,7 +53348,10 @@ function celFigureCast3D(actor, snapshot, ctx, options) {
     const ga = ctx.globalAlpha;
     ctx.globalAlpha = ga * A;
     try { Player3D.draw(snapshot, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; _celCastOpts.shade = null; }
-    if (_depthOn) celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
+    if (_depthOn) {
+      celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
+      celFigureWallFlushNow();
+    }
   }
   return shade;
 }
@@ -53303,7 +53377,10 @@ function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k, model) {
   job.n = n; job.ox = ox; job.oy = oy; job.A = A; job.k = k;
   job.wall = wall; job.plane = plane; job.ux = LIGHT_DX; job.uy = LIGHT_DY;
   job.ex = _cfsWallLean[0]; job.ey = _cfsWallLean[1];
-  job.key = b._depthKey === undefined ? Infinity : b._depthKey;
+  // A split building's walls are already down, so its share of a shadow is
+  // painted at once -- under the figure that casts it, who stands in front.
+  job.key = _depthSplitOn && b._splitMass === true ? -Infinity :
+    (b._depthKey === undefined ? Infinity : b._depthKey);
   for (let i = 0; i < 8; i++) job.quad[i] = q[i];
 }
 const _cfsQuad = new Float32Array(8);
@@ -53369,6 +53446,15 @@ function celFigureWalls(c, n, A, k, model) {
     }
   }
 }
+// The wall halves whose wall is already painted, drawn now. The caller is
+// inside a figure's own frame, so the world transform the sorted pass began in
+// is put back for the length of the call.
+function celFigureWallFlushNow() {
+  const ctx = typeof drawingContext !== 'undefined' ? drawingContext : null;
+  if (!_depthSplitOn || !_cfsJobN || !_depthWorldT || !ctx) return;
+  ctx.save();
+  try { ctx.setTransform(_depthWorldT); celFigureWallFlush(-Infinity); } finally { ctx.restore(); }
+}
 // Called by drawDepthSorted() after each run of masses with the depth it has
 // reached, and once more at the end with Infinity.
 function celFigureWallFlush(depth) {
@@ -53422,7 +53508,7 @@ function celFigureShadow(c, pose, fall) {
   const P = _cfsP;
   P.wall = 0; P.lx = LIGHT_DX * k; P.ly = LIGHT_DY * k;
   _cfsPaint(ctx, _cfsCaps, n, 0, 0, A, !!c.isPlayer);
-  if (_depthOn) celFigureWalls(c, n, A, k);
+  if (_depthOn) { celFigureWalls(c, n, A, k); celFigureWallFlushNow(); }
   return true;
 }
 function charShadowX(off) { return BIOME_ACTIVE ? LIGHT_DX * off * 1.35 * shadowLengthScale() : off; }
@@ -70489,7 +70575,10 @@ const CityBuildings3D = (() => {
     if(f.kind==='facade')return diffuse<.10?0:diffuse<.36?1:2;
     return diffuse<.56?0:diffuse<.74?1:2;
   }
-  function draw(b,g=window) {
+  // part 0 is the whole building. 1 is the walls and their facade, 2 the roof
+  // alone: the sorted pass puts the people of the street between the two.
+  // `edge` asks part 2 for the roof's outline as well; see drawDepthSorted().
+  function draw(b,g=window,part=0,edge=false) {
     const p=project(b),ctx=g&&(g.drawingContext||g);
     if(!p||!ctx||typeof ctx.fill!=='function')return false;
     const dx=typeof LIGHT_DX==='number'?LIGHT_DX:.6,dy=typeof LIGHT_DY==='number'?LIGHT_DY:.8;
@@ -70518,29 +70607,49 @@ const CityBuildings3D = (() => {
       // Silhouette first: one path, one stroke, covered on its inner half by
       // everything painted after it.
       if(target)ctx.setTransform(target);
-      ctx.strokeStyle=CEL_INK;ctx.lineJoin='bevel';ctx.lineWidth=3.4;
-      ctx.beginPath();
-      for(const f of p.faces){
-        if(!f.visible||!f.hull)continue;
-        const q=f.projected;ctx.moveTo(q[0],q[1]);
-        for(let i=2;i<q.length;i+=2)ctx.lineTo(q[i],q[i+1]);ctx.closePath();
+      if(part!==2){
+        // The whole silhouette goes down with the walls even when the roof is
+        // to follow, so the building's outline is the same line either way.
+        ctx.strokeStyle=CEL_INK;ctx.lineJoin='bevel';ctx.lineWidth=3.4;
+        ctx.beginPath();
+        for(const f of p.faces){
+          if(!f.visible||!f.hull)continue;
+          const q=f.projected;ctx.moveTo(q[0],q[1]);
+          for(let i=2;i<q.length;i+=2)ctx.lineTo(q[i],q[i+1]);ctx.closePath();
+        }
+        ctx.stroke();stats.outlines++;
+        ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
+        for(const f of p.bodyFaces)paint(f);
+        // The corners between two showing walls, and the eave over them.
+        if(target)ctx.setTransform(target);
+        ctx.lineWidth=1.3;ctx.strokeStyle='rgba(26,22,38,.78)';ctx.beginPath();
+        for(const f of p.bodyFaces){
+          if(!f.visible)continue;const q=f.projected;
+          ctx.moveTo(q[0],q[1]);ctx.lineTo(q[6],q[7]);ctx.lineTo(q[4],q[5]);ctx.lineTo(q[2],q[3]);
+        }
+        ctx.stroke();
+        for(const f of p.facadeFaces)paint(f);
       }
-      ctx.stroke();stats.outlines++;
-      ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
-      for(const f of p.bodyFaces)paint(f);
-      // The corners between two showing walls, and the eave over them.
-      if(target)ctx.setTransform(target);
-      ctx.lineWidth=1.3;ctx.strokeStyle='rgba(26,22,38,.78)';ctx.beginPath();
-      for(const f of p.bodyFaces){
-        if(!f.visible)continue;const q=f.projected;
-        ctx.moveTo(q[0],q[1]);ctx.lineTo(q[6],q[7]);ctx.lineTo(q[4],q[5]);ctx.lineTo(q[2],q[3]);
+      if(part!==1){
+        if(part===2&&edge){
+          // The roof's own edge, laid again over whoever is standing under it:
+          // without it a figure tucked under an eave meets the roof with no
+          // line between them. Thin, so the eave over a wall keeps its weight.
+          if(target)ctx.setTransform(target);
+          ctx.lineJoin='bevel';ctx.lineWidth=1.3;ctx.strokeStyle='rgba(26,22,38,.78)';ctx.beginPath();
+          for(const f of p.roofFaces){
+            if(!f.visible||!f.hull)continue;
+            const q=f.projected;ctx.moveTo(q[0],q[1]);
+            for(let i=2;i<q.length;i+=2)ctx.lineTo(q[i],q[i+1]);ctx.closePath();
+          }
+          ctx.stroke();
+        }
+        ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
+        for(const f of p.roofFaces)paint(f);
       }
-      ctx.stroke();
-      for(const f of p.facadeFaces)paint(f);
-      ctx.lineWidth=.9;ctx.strokeStyle='rgba(26,22,38,.5)';
-      for(const f of p.roofFaces)paint(f);
     }finally{ctx.restore();}
-    stats.draws++;return true;
+    if(part!==2)stats.draws++;
+    return true;
   }
   // THE SHADOW IS THE SHAPE OF THE BUILDING, NOT OF ITS BOX.
   //
