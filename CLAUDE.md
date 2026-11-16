@@ -3879,8 +3879,8 @@ into one per-frame union by the sorted pass's shadow pre-pass and filled once
 shaded twice. Do not add the boughs back as separate polygons: they lie inside
 the crown's shadow and were the entire cost of the union fill. Generic `TREE`/`PINE`/`SNAG` decor
 takes the same path. Trees throw at `CEL_TREE_REACH` (1.35, the rig's own
-slope), not the buildings' 2.0, because a tree's rise is its real height, and
-at `CEL_TREE_SHADE` of a wall's tone. Each crown shading the ground is also
+slope), not the buildings' 2.0, because a tree's rise is its real height, in
+the same tone as a wall's (`CEL_TREE_SHADE` 1). Each crown shading the ground is also
 recorded for figures: `celTreeShadeAt()` on the CPU and up to six ellipses
 (`uShadeDisc`, `uShadeSpan`, `uShadeLeaf`) in the Player3D shader, the same
 segment-against-ellipse test, which `check-cel-levels.js` holds to agree with
@@ -3892,6 +3892,21 @@ outside `CITY_DENSE` ground), which keep their own art and height but still
 take cel walls, ink and a cel shadow. Its roof kit paints `UNDERCITY_PALETTE`
 (soot slate, tar, verdigris, soot brick), and one window in eleven is lit
 after dark: the grid is down.
+**Building and tree shadows are drawn the way a figure's is.** A figure's shadow
+is its model rendered at 0.4 resolution and stretched back up as four copies
+0.85 texel apart (`celFigureCast3D`); that is its soft edge. Every building and
+tree shadow in a cel level goes into one screen-space layer at the same
+`CEL_SHADOW_RES` (0.4), filled opaque in its caster's `celShadowRGB`, softened by
+the same four taps (`CEL_SHADOW_TAP`) at the alpha share that composites to
+exactly `celShadowAlpha()`, and laid down once by `celShadowLayerFlush()` at the
+end of the sorted pass's shadow pre-pass. `celShadowLayerOpen()` is opened by
+`drawBiomeShadows()` and joined by `celTreeShadowBegin()`; only the rectangle the
+shadows touched (`celShadowLayerMark`) is cleared, tapped and blitted. One layer
+is one union, so overlapping building and tree shadows are shaded once.
+`CEL_TREE_SHADE` is 1: trees, walls and figures share one tone. Without a canvas
+(the node harness) the casters fill straight onto the screen. Do not draw a cel
+building or tree shadow directly when the layer is open, or it comes out hard
+and doubles where it overlaps.
 Do not go back to a whole-figure tint or fade for model-drawn figures. Every
 cel shadow takes its colour from `celShadowRGB(x, y)` (the sky-derived slate
 the game always used, or a level's own hue at that point: the Undercity's

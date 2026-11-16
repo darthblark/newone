@@ -309,5 +309,124 @@ console.log('\n== the figure shader carries the crowns ==');
   ok('an actor drawn with no shade turns every crown off', /noShadeSpans=new Float32Array\(\[0,-1e6/.test(src));
 }
 
+// -- the soft layer -----------------------------------------------------------
+//
+// Buildings and trees cast into one screen-space layer at the figures' own
+// cast resolution, softened by the figures' own four taps and laid down once.
+// A recording canvas stands in for the browser's: every fill, clear and blit
+// is logged with the transform and alpha it was made under.
+console.log('\n== building and tree shadows are drawn the way a figure\'s is ==');
+probe(`
+  __layerLog = []; __cvN = 0;
+  __mkCtx = function (name, cv) {
+    return { name: name, canvas: cv, fillStyle: '#000000', globalAlpha: 1, imageSmoothingEnabled: false,
+      imageSmoothingQuality: 'low', T: [1, 0, 0, 1, 0, 0], _s: [],
+      setTransform(a, b, c, d, e, f) { this.T = [a, b, c, d, e, f]; },
+      getTransform() { const t = this.T; return { a: t[0], b: t[1], c: t[2], d: t[3], e: t[4], f: t[5] }; },
+      save() { this._s.push([this.T.slice(), this.fillStyle, this.globalAlpha, this.imageSmoothingQuality]); },
+      restore() { const s = this._s.pop(); this.T = s[0]; this.fillStyle = s[1]; this.globalAlpha = s[2]; this.imageSmoothingQuality = s[3]; },
+      clearRect(x, y, w, h) { __layerLog.push({ ctx: name, op: 'clear', r: [x, y, w, h] }); },
+      fill(p) { __layerLog.push({ ctx: name, op: 'fill', style: this.fillStyle, T: this.T.slice(), path: !!p }); },
+      beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, translate() {},
+      drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) {
+        __layerLog.push({ ctx: name, op: 'draw', src: img.__name, a: this.globalAlpha, T: this.T.slice(),
+          smooth: this.imageSmoothingEnabled, q: this.imageSmoothingQuality, s: [sx, sy, sw, sh], d: [dx, dy, dw, dh] });
+      } };
+  };
+  document.createElement = function () {
+    const cv = { width: 0, height: 0, __name: 'cv' + (__cvN++) };
+    cv.getContext = function () { if (!this._c) this._c = __mkCtx(this.__name, this); return this._c; };
+    return cv;
+  };
+  // The main canvas: a phone at density 2, the camera at zoom 0.65.
+  __mainCv = { width: 824, height: 1784, __name: 'main' };
+  __main = __mkCtx('main', __mainCv);
+  __cam = function (cx, cy) {
+    zoom = 0.65; const pd = 2;
+    camX = cx - 412 / zoom * 0.5; camY = cy - 892 / zoom * 0.5;
+    viewLeft = camX; viewRight = camX + 412 / zoom; viewTop = camY; viewBottom = camY + 892 / zoom;
+    __main.T = [pd * zoom, 0, 0, pd * zoom, -camX * pd * zoom, -camY * pd * zoom];
+  };
+  __frame = function (cast) {
+    frameCount++; __layerLog.length = 0; drawingContext = __main;
+    drawBiomeShadows();
+    celTreeShadowBegin();
+    for (const d of cast) celTreeShadow(d, false);
+    celTreeShadowFlush();
+    return __layerLog.slice();
+  };
+`);
+{
+  const r = P(`(() => {
+    __lv(1); __day(15); authoredChunks = null;
+    const glWas = glRigActive; glRigActive = () => false;
+    try {
+      __cam(600, 600);
+      const blk = { x: 600, y: 560, w: 180, h: 150, isBlockBuilding: true, details: [], style: 1 };
+      activeBuildings = [blk]; invalidateColIndex();
+      const was = __main.fillStyle;
+      const log = __frame([{ t: 'TREE', x: 760, y: 700, s: 1.2, r: 0, c: 0.3 }]);
+      const T = __main.T, S = CEL_SHADOW_RES;
+      const fills = log.filter(e => e.op === 'fill');
+      const mainFills = fills.filter(e => e.ctx === 'main');
+      const layerFills = fills.filter(e => e.ctx !== 'main');
+      const mainDraws = log.filter(e => e.ctx === 'main' && e.op === 'draw');
+      const taps = log.filter(e => e.ctx !== 'main' && e.op === 'draw');
+      const A = celShadowAlpha();
+      const plan = CityBuildings3D.project(blk), rox = LIGHT_DX * shadowLengthScale() * CEL_SHADOW_REACH;
+      const roy = LIGHT_DY * shadowLengthScale() * CEL_SHADOW_REACH;
+      // The far corner of the roof's shadow, in device pixels.
+      const fx = (blk.x + Math.sign(rox) * blk.w / 2 + rox * plan.maxZ) * T[0] + T[4];
+      const fy = (blk.y + Math.sign(roy) * blk.h / 2 + roy * plan.maxZ) * T[3] + T[5];
+      return { layerFills: layerFills.length, mainFills: mainFills.length, opaque: layerFills.every(e => /^rgb\\(/.test(e.style)),
+        layerT: layerFills.map(e => e.T), mainT: T, S, mainDraws, taps, A, styleKept: __main.fillStyle === was, fx, fy,
+        styles: layerFills.map(e => e.style) };
+    } finally { glRigActive = glWas; activeBuildings = []; }
+  })()`);
+  ok('every building and tree shadow goes into the layer, none straight onto the screen',
+     r.layerFills >= 2 && r.mainFills === 0, r.layerFills + ' into the layer, ' + r.mainFills + ' onto the screen');
+  ok('each is filled opaque, in its own colour', r.opaque, r.styles.join(' '));
+  ok('the layer sits at the figures\' cast resolution under the camera',
+     r.S === 0.4 && r.layerT.every(t => Math.abs(t[0] - r.mainT[0] * r.S) < 1e-9 && Math.abs(t[3] - r.mainT[3] * r.S) < 1e-9 &&
+       Math.abs(t[4] - r.mainT[4] * r.S) < 1e-9 && Math.abs(t[5] - r.mainT[5] * r.S) < 1e-9), JSON.stringify(r.layerT[0]));
+  const tapA = r.taps.length ? r.taps[0].a : 0, off = r.taps.map(t => [t.d[0] - t.s[0], t.d[1] - t.s[1]]);
+  ok('softened by the cast\'s own four taps, 0.85 of a texel apart', r.taps.length === 4 &&
+     off.every(o => Math.abs(Math.abs(o[0]) - 0.85) < 1e-9 && Math.abs(Math.abs(o[1]) - 0.85) < 1e-9) &&
+     new Set(off.map(o => o.join(','))).size === 4, JSON.stringify(off));
+  ok('whose alphas composite to exactly the figures\' shadow alpha',
+     r.taps.every(t => t.a === tapA) && Math.abs(1 - Math.pow(1 - tapA, 4) - r.A) < 1e-9, tapA.toFixed(4) + ' -> ' + r.A.toFixed(4));
+  ok('laid on the screen in ONE blit, so overlapping shadows are shaded once', r.mainDraws.length === 1, r.mainDraws.length);
+  const m = r.mainDraws[0] || { s: [0, 0, 0, 0], d: [0, 0, 0, 0], T: [], a: 0 };
+  ok('stretched back up from the layer to device pixels, smoothed',
+     m.T.join(',') === '1,0,0,1,0,0' && m.a === 1 && m.smooth && m.q === 'high' &&
+     m.d.every((v, i) => Math.abs(v - m.s[i] / r.S) < 1e-9), JSON.stringify({ s: m.s, d: m.d }));
+  ok('and only as much of it as the shadows touched, which reaches the roof\'s far corner',
+     m.d[0] <= r.fx && m.d[0] + m.d[2] >= r.fx && m.d[1] <= r.fy && m.d[1] + m.d[3] >= r.fy && m.d[2] < 824,
+     JSON.stringify(m.d.map(v => Math.round(v))) + ' corner ' + Math.round(r.fx) + ',' + Math.round(r.fy));
+  ok('the screen\'s fill style is put back (p5 caches it)', r.styleKept);
+}
+{
+  const r = P(`(() => {
+    const glWas = glRigActive; glRigActive = () => false;
+    try {
+      const blk = { x: 600, y: 560, w: 180, h: 150, isBlockBuilding: true, details: [], style: 1 };
+      const tree = { t: 'PINE', forestSpecies: 'DOUGLAS_FIR', forestRegion: 'TIMBER', x: -3000, y: 600, s: 1, r: 0.3, c: 0.4 };
+      __lv(1); __day(23); __cam(600, 600); activeBuildings = [blk]; invalidateColIndex();
+      const night = __frame([]).filter(e => e.ctx === 'main' && e.op === 'draw').length;
+      __lv(2); __day(15); authoredChunks = null; __cam(-3000, 700); activeBuildings = [];
+      const forest = __frame([tree]);
+      const teal = forest.filter(e => e.op === 'fill' && e.ctx !== 'main').map(e => e.style);
+      __lv(4); __cam(600, 600); activeBuildings = [blk];
+      const other = __frame([]).filter(e => e.ctx !== 'main').length;
+      return { night, teal, forestDraws: forest.filter(e => e.ctx === 'main' && e.op === 'draw').length, other };
+    } finally { glRigActive = glWas; activeBuildings = []; }
+  })()`);
+  ok('at night nothing is laid down', r.night === 0, r.night);
+  ok('the Undercity\'s forest crowns go in in the forest\'s teal', r.teal.length >= 1 && r.teal.every(s => s === 'rgb(14,35,36)'),
+     r.teal.join(' '));
+  ok('and the forest is one blit too', r.forestDraws === 1, r.forestDraws);
+  ok('outside a cel level the layer is never touched', r.other === 0, r.other);
+}
+
 console.log('\n' + (checks - fails) + '/' + checks + ' checks passed');
 process.exit(fails ? 1 : 0);

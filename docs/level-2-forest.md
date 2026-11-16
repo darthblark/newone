@@ -313,8 +313,9 @@ native rendering or measuring device performance.
   when enabled. Never paint two sun shadows for one tree.
 - **The Undercity is a cel level** (see [Level 2 cel depth](level2-cel-depth.md)),
   so in play the 2D pass owns the sun even with the rig running: each crown
-  casts a hard-edged cel shadow in its own shape (`celTreeShadow()`) and the
-  soft contact capsule stands down. The rig keeps its height stamps for relief
+  casts a cel shadow in its own shape (`celTreeShadow()`), softened in the
+  same layer and with the same taps as the figures' shadows, and the soft
+  contact capsule stands down. The rig keeps its height stamps for relief
   shading and lamp shadows. Floor props keep their Canvas contact shadows.
 
 The real frame opens its depth queue **before** `drawGround()` calls the chunk

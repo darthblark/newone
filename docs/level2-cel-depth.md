@@ -84,12 +84,13 @@ cast in the 2D pass (`celTreeShadow()`):
   play zoom the result was indistinguishable.
 - Paths are in world space, cached per tree and rebuilt only when the sun moves
   by 1/128 of a unit per unit of height.
-- Every tree in view is added to one path and filled once, so overlapping
-  crowns do not double-darken. Shadows lying wholly off screen are not added.
+- Every tree in view goes into the same soft shadow layer as the buildings
+  (see below), so overlapping crowns do not double-darken. Shadows lying wholly
+  off screen are not added.
 - Trees throw at `CEL_TREE_REACH` (1.35, the rig's own slope), not the
   buildings' 2.0, because a tree's rise is its real height (102-136) where a
-  building's is held low. A crown's shade is `CEL_TREE_SHADE` (0.84) of a
-  wall's.
+  building's is held low. A crown's shade is the same tone as a wall's
+  (`CEL_TREE_SHADE` 1; see Soft edges, one tone).
 - Generic `TREE` / `PINE` / `SNAG` decor (Stick City's parks, for one) uses the
   same path at its own scale. The soft `forestContactShadow` capsule and the
   generic painted oval stand down wherever a crown has been cast.
@@ -110,6 +111,62 @@ between those heights: a segment against an ellipse.
   figure's own shadow is dropped where it would double up.
 - `check-cel-levels.js` replicates the shader's arithmetic against the
   descriptor and asserts it matches the CPU test at 529 ground points.
+
+## Soft edges, one tone
+
+A figure's shadow is its posed model rendered at 0.4 of the screen's
+resolution and stretched back up as four copies a fraction of a texel apart
+(`celFigureCast3D`). That is what gives it the soft edge of a real shadow, and
+the hard vector edges of the first building and tree shadows did not match it:
+side by side, the figure's read as a shadow and the wall's as a decal.
+
+So the buildings' and trees' shadows are drawn the same way. In a cel level
+every one of them goes into one screen-space layer at the cast's resolution
+(`CEL_SHADOW_RES`, 0.4), filled opaque in its own colour, softened by the
+cast's four taps (`CEL_SHADOW_TAP`, 0.85 texel) at the alpha share that
+composites to exactly the figures' `celShadowAlpha()`, and laid on the ground
+once at the end of the sorted pass's shadow pre-pass (`celShadowLayerFlush`).
+Same resolution, same taps, same alpha, same colour: the edge on a wall's
+shadow and the edge on a figure's are made by the same arithmetic.
+
+- One layer is one union: where a building's shadow meets a tree's, or two
+  buildings' shadows overlap, the ground is shaded once.
+- Trees are now the same tone as walls and figures (`CEL_TREE_SHADE` 1, was
+  0.84); figures standing under a crown darken by the same amount as under a
+  wall.
+- Only the screen rectangle the shadows touched is cleared, tapped and
+  blitted (`celShadowLayerMark`).
+- Where there is no canvas to hold the layer (the node harness) the casters
+  fill straight onto the screen as before.
+
+Before and after at a phone's geometry (412 wide at density 2), Stick City at
+1:1 canvas pixels, figures' shadows beside a building's:
+
+![Level 1 soft shadows](previews/cel-soft-shadows-level1.png)
+
+The Undercity's forest, a fir's crown shadow beside the figures':
+
+![Level 2 soft shadows](previews/cel-soft-shadows-level2.png)
+
+Cost, measured as real `draw()` frames in headless Chromium with SwiftShader
+(the GPU emulated on the CPU, so every pass is paid in software), at a phone's
+geometry (412x892 at pixel density 2), WebGL rig running, median of 60 frames:
+
+| scene | previous commit | soft layer |
+|---|---|---|
+| Stick City street, no crowd | 16.6 ms (a 48.3 ms first run was warm-up) | 20.9 / 25.7 ms |
+| ...without the final blit | | 12.2 ms |
+| ...without the four taps | | 17.1 ms |
+| Stick City, 80 model-drawn figures | 319-356 ms | 334-395 ms (run-to-run noise ~20 ms) |
+| Undercity forest | 20.4 / 20.8 ms | 20.5 / 24.7 ms |
+| bicubic vs bilinear final blit, city | | no measurable difference |
+
+In software the layer costs about 4-9 ms a frame: roughly 4 for the taps and
+9 for stretching the result back over the shadowed part of the screen, partly
+offset by the shadow shapes now being filled at 0.4 resolution. Those are a
+few full-screen texture blits, which a phone GPU does in hardware, so the real
+cost on a device should be well under that -- but it has not been measured on
+a phone.
 
 ## Colour
 

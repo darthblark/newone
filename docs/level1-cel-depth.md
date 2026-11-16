@@ -10,6 +10,10 @@ that already existed are toned, outlined and shadowed.
 Morning light across a courtyard district:
 [previews/level1-cel-depth-morning.png](previews/level1-cel-depth-morning.png)
 
+**Since then:** the building and tree shadows are softened the way the figures'
+are, in one layer at the figures' cast resolution and alpha; see
+[Soft edges, one tone](level2-cel-depth.md#soft-edges-one-tone).
+
 ## What changed
 
 - **Cel tones.** `CityBuildings3D.draw()` snaps each face's diffuse term to

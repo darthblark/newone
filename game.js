@@ -53305,22 +53305,32 @@ function celShadowAlpha() {
 // hundred units across the clearing at dawn. And foliage is not a wall:
 // CEL_TREE_SHADE lets a little of the sun through.
 const CEL_TREE_REACH = 1.35;
-const CEL_TREE_SHADE = 0.84;
+// One tone with the buildings and the figures. It was 0.84, on the grounds
+// that leaves let light through; next to a figure's shadow and a wall's in the
+// same street that read as a different colour of shadow, and every shadow in a
+// cel level now goes down as one layer at one alpha (celShadowLayerFlush).
+const CEL_TREE_SHADE = 1;
 const CEL_TREE_MAX = 192;
 // The crowns shading the ground this frame, for the figures standing on it:
 // x, y, rx, ry, lowest and highest crown height.
 const _celTrees = new Float32Array(CEL_TREE_MAX * 6);
 let _celTreeN = 0, _celTreeFrame = -1, _celTreeBatch = false;
-let _celTreeUnion = null, _celTreeX = 0, _celTreeY = 0;
+let _celTreeUnion = null, _celTreeX = 0, _celTreeY = 0, _celTreeLayer = null;
+// The world box of the path being built, so the layer knows what it touched.
+const _celTreeBox = [0, 0, 0, 0];
 const _celTreePaths = new WeakMap();
 const _celTreePts = [];
 function celTreeCount() { return _celTreeFrame === frameCount ? _celTreeN : 0; }
 // Opened by drawDepthSorted() before its shadow pre-pass and flushed after it.
 function celTreeShadowBegin() {
   _celTreeFrame = frameCount; _celTreeN = 0; _celTreeBatch = true; _celTreeUnion = null;
+  // The soft layer the buildings' shadows already went into, if this frame
+  // has one; trees join it and the whole layer is laid down at the flush.
+  _celTreeLayer = celShadowLayerOpen();
 }
 function celTreeShadowFlush() {
-  _celTreeBatch = false;
+  _celTreeBatch = false; _celTreeLayer = null;
+  celShadowLayerFlush();
   const path = _celTreeUnion; _celTreeUnion = null;
   if (!path || typeof drawingContext === 'undefined' || !drawingContext) return;
   const A = celShadowAlpha() * CEL_TREE_SHADE;
@@ -53333,6 +53343,11 @@ function celTreeShadowFlush() {
 // One polygon into the path, wound the same way as every other, so the
 // nonzero rule unions them.
 function _celTreePoly(path, pts, n) {
+  const B = _celTreeBox;
+  for (let i = 0; i < n; i++) {
+    const x = pts[i * 2], y = pts[i * 2 + 1];
+    if (x < B[0]) B[0] = x; if (y < B[1]) B[1] = y; if (x > B[2]) B[2] = x; if (y > B[3]) B[3] = y;
+  }
   let area = 0;
   for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += pts[i * 2] * pts[j * 2 + 1] - pts[j * 2] * pts[i * 2 + 1]; }
   if (Math.abs(area) < 0.25) return;
@@ -53410,6 +53425,7 @@ function _celTreeCrown(d, cm) {
 }
 function _celTreeBuild(d, cm, ox, oy) {
   const path = new Path2D(), s = d.s || 1, R = cm[0] * s, x = d.x, y = d.y;
+  _celTreeBox[0] = _celTreeBox[1] = Infinity; _celTreeBox[2] = _celTreeBox[3] = -Infinity;
   const fp = forestPropProfile(d), sh = _celTreeCrown(d, cm);
   const tw = (fp && fp.trunkWidth ? fp.trunkWidth : 10.4) * s * 0.5;
   if (d.forestSpecies === 'CHARRED_SNAG' || (!d.forestSpecies && d.t === 'SNAG')) {
@@ -53476,8 +53492,13 @@ function celTreeShadow(d, rooted) {
   }
   let rec = _celTreePaths.get(d);
   if (!rec || rec.qx !== qx || rec.qy !== qy || rec.s !== d.s || rec.cs !== d.forestCrownScale) {
-    rec = { qx, qy, s: d.s, cs: d.forestCrownScale, path: _celTreeBuild(d, cm, qx, qy) };
+    rec = { qx, qy, s: d.s, cs: d.forestCrownScale, path: _celTreeBuild(d, cm, qx, qy), box: _celTreeBox.slice() };
     _celTreePaths.set(d, rec);
+  }
+  if (_celTreeBatch && _celTreeLayer) {
+    const B = rec.box;
+    celShadowLayerFill(rec.path, d.x, d.y, B[0] - 2, B[1] - 2, B[2] + 2, B[3] + 2);
+    return true;
   }
   if (_celTreeBatch && typeof rec.path.addPath === 'function') {
     if (!_celTreeUnion) { _celTreeUnion = new Path2D(); _celTreeX = d.x; _celTreeY = d.y; }
@@ -53876,6 +53897,129 @@ function celShadowStyle(alpha, x, y) {
   const c = celShadowRGB(x, y);
   return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha.toFixed(4) + ')';
 }
+
+// THE BUILDINGS' AND TREES' SHADOWS ARE DRAWN THE WAY A FIGURE'S IS.
+//
+// A figure's shadow is its model rendered small and stretched back up, laid as
+// four copies a fraction of a texel apart (celFigureCast3D, Player3D's cast
+// pass). That is what gives it the soft edge of a real shadow, and it is the
+// look the rest of the scene has to match: a hard vector polygon beside it
+// reads as a decal laid on the road next to a shadow. So every building and
+// tree shadow in a cel level goes into ONE screen-space layer at the cast's
+// own resolution (CEL_SHADOW_RES), is softened with the cast's own four taps,
+// and is laid over the ground once, at the alpha and in the colour the figures
+// cast in. Same resolution, same taps, same tone: the edge on a wall's shadow
+// and the edge on a man's are made the same way.
+//
+// One layer also means one union. Each shadow is filled into it opaque, so
+// where a building's shadow crosses a tree's, or two buildings' meet, the
+// ground is shaded once, not twice -- which is what shade is.
+//
+// The cost is the layer, not the shapes: the fills land at 0.4 of the
+// screen's resolution, the four taps run at that size too, and only the
+// screen rectangle the shadows actually touched is cleared, softened and
+// composited (one stretched blit). Without a canvas to draw it on (the node
+// harness, a context with no getTransform) celShadowLayerCtx() returns null
+// and every caster fills straight onto the screen as before.
+const CEL_SHADOW_RES = 0.4;        // the figures' cast resolution (celFigureCast3D)
+const CEL_SHADOW_TAP = 0.85;       // ...and its tap offset, in texels
+const _celLayer = { mask: null, mctx: null, soft: null, sctx: null, w: 0, h: 0, frame: -1, open: false,
+  a: 1, d: 1, e: 0, f: 0, x0: 0, y0: 0, x1: 0, y1: 0, failed: false };
+function _celLayerCanvas(w, h) {
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  const c = document.createElement('canvas');
+  if (!c || typeof c.getContext !== 'function') return null;
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  return g && typeof g.fill === 'function' && typeof g.drawImage === 'function' ? c : null;
+}
+// Opened by drawBiomeShadows(), flushed at the end of the sorted pass's shadow
+// pre-pass, once a frame. Returns the layer's context, in world coordinates,
+// or null when the shadows must be drawn directly.
+function celShadowLayerOpen() {
+  const L = _celLayer;
+  if (L.open && L.frame === frameCount) return L.mctx;
+  L.open = false;
+  if (L.failed || !celScene() || typeof drawingContext === 'undefined' || !drawingContext ||
+      typeof drawingContext.getTransform !== 'function' || !drawingContext.canvas) return null;
+  const cv = drawingContext.canvas;
+  const w = Math.max(16, Math.ceil(cv.width * CEL_SHADOW_RES)), h = Math.max(16, Math.ceil(cv.height * CEL_SHADOW_RES));
+  if (!L.mask || L.w !== w || L.h !== h) {
+    L.mask = _celLayerCanvas(w, h); L.soft = _celLayerCanvas(w, h);
+    if (!L.mask || !L.soft) { L.failed = true; L.mask = L.soft = null; return null; }
+    L.mctx = L.mask.getContext('2d'); L.sctx = L.soft.getContext('2d'); L.w = w; L.h = h;
+  }
+  const T = drawingContext.getTransform();
+  // An unrotated camera, which is the only one this game has; anything else
+  // keeps the direct path rather than misplace the layer.
+  if (Math.abs(T.b) > 1e-6 || Math.abs(T.c) > 1e-6) return null;
+  L.a = T.a * CEL_SHADOW_RES; L.d = T.d * CEL_SHADOW_RES; L.e = T.e * CEL_SHADOW_RES; L.f = T.f * CEL_SHADOW_RES;
+  const m = L.mctx;
+  m.setTransform(1, 0, 0, 1, 0, 0);
+  m.clearRect(0, 0, w, h);
+  m.setTransform(L.a, 0, 0, L.d, L.e, L.f);
+  L.x0 = Infinity; L.y0 = Infinity; L.x1 = -Infinity; L.y1 = -Infinity;
+  L.frame = frameCount; L.open = true;
+  return m;
+}
+// The world box a shadow covers, so only that much of the layer is softened
+// and composited.
+function celShadowLayerMark(wx0, wy0, wx1, wy1) {
+  const L = _celLayer;
+  const ax = L.a * wx0 + L.e, bx = L.a * wx1 + L.e, ay = L.d * wy0 + L.f, by = L.d * wy1 + L.f;
+  if (Math.min(ax, bx) < L.x0) L.x0 = Math.min(ax, bx);
+  if (Math.max(ax, bx) > L.x1) L.x1 = Math.max(ax, bx);
+  if (Math.min(ay, by) < L.y0) L.y0 = Math.min(ay, by);
+  if (Math.max(ay, by) > L.y1) L.y1 = Math.max(ay, by);
+}
+// One shadow into the layer, opaque, in its own colour.
+function celShadowLayerFill(path, x, y, wx0, wy0, wx1, wy1) {
+  const L = _celLayer, c = celShadowRGB(x, y);
+  L.mctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  L.mctx.fill(path);
+  celShadowLayerMark(wx0, wy0, wx1, wy1);
+}
+function celShadowLayerFlush() {
+  const L = _celLayer;
+  if (!L.open) return;
+  L.open = false;
+  if (!(L.x1 > L.x0) || !(L.y1 > L.y0)) return;
+  const A = celShadowAlpha();
+  if (A <= 0.004 || typeof drawingContext === 'undefined' || !drawingContext) return;
+  // The touched rectangle, in layer texels, with room for the taps and the
+  // filter to read past the edge.
+  const pad = 3;
+  const x0 = Math.max(0, Math.floor(L.x0) - pad), y0 = Math.max(0, Math.floor(L.y0) - pad);
+  const x1 = Math.min(L.w, Math.ceil(L.x1) + pad), y1 = Math.min(L.h, Math.ceil(L.y1) + pad);
+  const w = x1 - x0, h = y1 - y0;
+  if (w <= 0 || h <= 0) return;
+  // The cast's four taps, each at the share of the alpha that composites back
+  // to exactly A where they all overlap -- celFigureCast3D's arithmetic.
+  const s = L.sctx, o = CEL_SHADOW_TAP, tap = 1 - Math.pow(1 - Math.min(0.98, A), 0.25);
+  s.setTransform(1, 0, 0, 1, 0, 0);
+  // All of it, not just this frame's rectangle: filtering reads a texel past
+  // the source rectangle, and last frame's shadows there would bleed in as a
+  // line along its edge. At 0.4 resolution a full clear costs nothing.
+  s.clearRect(0, 0, L.w, L.h);
+  s.imageSmoothingEnabled = true;
+  s.globalAlpha = tap;
+  s.drawImage(L.mask, x0, y0, w, h, x0 - o, y0 - o, w, h);
+  s.drawImage(L.mask, x0, y0, w, h, x0 + o, y0 - o, w, h);
+  s.drawImage(L.mask, x0, y0, w, h, x0 - o, y0 + o, w, h);
+  s.drawImage(L.mask, x0, y0, w, h, x0 + o, y0 + o, w, h);
+  s.globalAlpha = 1;
+  // ...and stretched back up to the screen, which is the rest of the softness.
+  const ctx = drawingContext, k = 1 / CEL_SHADOW_RES;
+  ctx.save();
+  try {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = true;
+    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(L.soft, x0, y0, w, h, x0 * k, y0 * k, w * k, h * k);
+  } finally { ctx.restore(); }
+}
+
 function drawBiomeShadows() {
   // The deferred rig ray-marches the sun against the same silhouettes this
   // pass draws from, so exactly one of the two may run -- both would double the
@@ -54074,14 +54218,33 @@ function drawBiomeShadows() {
         // than a shadow; it still takes the tone to zero by nightfall.
         const celA = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
         if (celA <= 0.004) continue;
-        const celStyle = celShadowStyle(celA, b.x, b.y);
-        if (cityRoof && CityBuildings3D.drawShadow(b, window, LIGHT_DX * SL * CEL_SHADOW_REACH,
-            LIGHT_DY * SL * CEL_SHADOW_REACH, celStyle)) continue;
+        // Into the soft layer when there is one (celShadowLayerOpen): opaque,
+        // in this building's own colour, softened and laid down with every
+        // other shadow at the end of the pre-pass.
+        const layer = celShadowLayerOpen();
+        const celStyle = layer ? null : celShadowStyle(celA, b.x, b.y);
+        const rox = LIGHT_DX * SL * CEL_SHADOW_REACH, roy = LIGHT_DY * SL * CEL_SHADOW_REACH;
+        if (cityRoof) {
+          const c = layer ? celShadowRGB(b.x, b.y) : null;
+          if (CityBuildings3D.drawShadow(b, layer || window, rox, roy,
+              layer ? 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')' : celStyle)) {
+            if (layer) {
+              const z = cityRoof.maxZ || rise;
+              celShadowLayerMark(Math.min(x0, x0 + rox * z) - 4, Math.min(y0, y0 + roy * z) - 4,
+                                 Math.max(x1, x1 + rox * z) + 4, Math.max(y1, y1 + roy * z) + 4);
+            }
+            continue;
+          }
+        }
         const cl = Math.min(84, Math.max(rise, Math.min(w, h) * 0.10)) * SL * CEL_SHADOW_REACH;
         const cdx = LIGHT_DX * cl, cdy = LIGHT_DY * cl;
         // Hull of the silhouette and its offset copy, for any sign of the sun.
-        const ctx2 = drawingContext, was = ctx2.fillStyle;     // see _cfsPaint
-        ctx2.fillStyle = celStyle;
+        const ctx2 = layer || drawingContext, was = ctx2.fillStyle;     // see _cfsPaint
+        if (layer) {
+          const c = celShadowRGB(b.x, b.y);
+          ctx2.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+          celShadowLayerMark(Math.min(x0, x0 + cdx), Math.min(y0, y0 + cdy), Math.max(x1, x1 + cdx), Math.max(y1, y1 + cdy));
+        } else ctx2.fillStyle = celStyle;
         ctx2.beginPath();
         if ((cdx >= 0) === (cdy >= 0)) {
           ctx2.moveTo(x0, y0); ctx2.lineTo(x1, y0); ctx2.lineTo(x1 + cdx, y0 + cdy);
