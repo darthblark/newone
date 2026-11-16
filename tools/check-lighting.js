@@ -254,7 +254,9 @@ console.log('\n== every light casts, and the budget is the thing that gives ==')
   ok('never below a floor, whatever the hour', budgetAt(13) >= 4);
   // A fixture past the budget gets no pool, so its haze must not pretend.
   ok('a fixture past the budget loses its haze but keeps its bulb',
-     /const pooled = \(typeof glRigOwnsSunShadows/.test(nightFn) &&
+     // Asked of the rig RUNNING: in a cel level the 2D pass owns the sun while
+     // the rig still carries every lamp.
+     /const pooled = \(typeof glRigActive === 'function' && glRigActive\(\) && BIOME_ACTIVE\)/.test(nightFn) &&
      /const hz = i < pooled \? 1 : 0\.20;/.test(nightFn) &&
      (nightFn.match(/\* k \* hz\)/g) || []).length === 4);
 }
@@ -452,7 +454,10 @@ const clutterArt = new Set((src.match(/case "(\w+)":/g) || []).map(x => /"(\w+)"
 ok('every canopy type has clutter art', ckeys.length > 0 && ckeys.every(k => clutterArt.has(k)),
    ckeys.join(' '));
 ok('a canopy drops its painted oval when the rig is casting for it',
-   /CANOPY_MASS\[d\.t\] && typeof glRigOwnsSunShadows/.test(src));
+   /CANOPY_MASS\[d\.t\] && \(typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows\(\) \|\|/.test(src));
+// ...or when a cel level's sorted pass has already cast its crown (celTreeShadow).
+ok('or when a cel level has already cast its crown',
+   /_depthOn && typeof celScene === 'function' && celScene\(\)\) \? 0 : shadowDensity\(\)/.test(src));
 ok('and every other live contact shadow fades with the sun',
    /const a = alpha \* sd;/.test(src) && /sd = CANOPY_MASS/.test(src));
 

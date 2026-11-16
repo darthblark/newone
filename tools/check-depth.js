@@ -790,7 +790,7 @@ ok('net zero over every prop the biome produces', probe('__depth') === 0,
 ok('and it never pops past where it started', probe('__minDepth') === 0,
    'lowest ' + probe('__minDepth'));
 
-// -- Level 1: a block building is its walls, then the street, then its roof --
+// -- A cel level: a block building is its walls, then the street, then its roof --
 //
 // Sorted as one piece, a building is wholly under a figure or wholly over them:
 // somebody against its south wall was painted over the roof, and somebody
@@ -819,9 +819,17 @@ ok('and it never pops past where it started', probe('__minDepth') === 0,
       _depthOn = true;
       drawDepthSorted();
       after = _massPart + '/' + _depthSplitOn;
-      // Any other level keeps the one-piece order.
+      // The Undercity is a cel level too: the same schedule.
       log.push('|');
       currentLevel = 2; currentBiome = 2;
+      activeBuildings = [block, plain, fresh];
+      _depthActors = [actor(1, 400), actor(2, -400)];
+      _depthOn = true;
+      drawDepthSorted();
+      // Any level outside CEL_LEVELS keeps the one-piece order.
+      log.push('|');
+      currentLevel = 4; currentBiome = 4;
+      activeBuildings = [block, plain, fresh];
       _depthActors = [actor(1, 400), actor(2, -400)];
       _depthOn = true;
       drawDepthSorted();
@@ -831,7 +839,7 @@ ok('and it never pops past where it started', probe('__minDepth') === 0,
     }
     return { log: log.join(' '), after: after };
   })()`);
-  const [city, other] = r.log.split(' | ').map(t => t.split(' '));
+  const [city, under, other] = r.log.split(' | ').map(t => t.split(' '));
   const at = (list, k) => list.indexOf(k);
   ok('Level 1 paints a block building\'s walls before anybody in the street',
      at(city, 'M1:1') === 0, r.log);
@@ -844,6 +852,8 @@ ok('and it never pops past where it started', probe('__minDepth') === 0,
      at(city, 'M2') > at(city, 'A2') && at(city, 'M2') < at(city, 'A1') &&
      at(city, 'M3') > at(city, 'A2') && at(city, 'M3') < at(city, 'A1'), r.log);
   ok('the pass leaves no part selected behind it', r.after === '0/false', r.after);
+  ok('the Undercity runs the same schedule: walls, the street, then the roof',
+     under.join(' ') === city.join(' '), under.join(' '));
   ok('and another level still draws the building in one piece',
      other.filter(k => k === 'M1').length === 1 && other.every(k => k.indexOf(':') < 0), other.join(' '));
 }

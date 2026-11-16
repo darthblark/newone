@@ -3709,6 +3709,7 @@ node tools/check-depth.js          # depth order, and how a mass projects
 node tools/check-lighting.js       # the deferred rig: uniforms resolve, nothing allocates per frame
 node tools/check-frame.js          # the real draw() in real Chromium: controls survive, push/pop balances, held buttons repeat
 node tools/check-fortress.js       # the overworld fortress: breach, muster, garrison, capture, save
+node tools/check-cel-levels.js     # the cel levels: gate, Undercity roofs/storeys, shadow hue, tree crowns, figure shade
 GAME_JS=/path/to/other.js node tools/check-generation.js    # compare against a baseline
 ```
 
@@ -3818,17 +3819,26 @@ Verification: `node tools/check-civic-terrace.js`. For visual review,
 p5 noise; add `night rain` for the wet night view. The tool prints the actual
 world coordinates. Its `rain` flag tests surface response, not rain particles.
 
-## Level 1 comic depth
+## Comic depth: the cel levels
 
-Stick City draws as inked cel solids; see [the depth pass](docs/level1-cel-depth.md).
-`celCityScene()` gates all of it. `CityBuildings3D.draw()` bands each face into
+Levels are drawn as inked cel solids, and this is the system new level art
+follows. Stick City was first ([the depth pass](docs/level1-cel-depth.md)); the
+Undercity is second ([Level 2](docs/level2-cel-depth.md)). A level joins by
+having an entry in `CEL_LEVELS` (biome, which block buildings are its city, a
+storey mix, a roof palette, how many windows are lit at night, an optional
+shadow hue by position). `celScene()` gates the live parts (shadows, the sorted
+pass, the rig); `celLevel()`/`celCityBlock(b)` gate the art (roof kit,
+storeys). Nothing else in the file may name a level number to decide this.
+`CityBuildings3D.draw()` bands each face into
 shade/mid/lit tones, strokes one batched silhouette before the fills and inks
-large roof planes; `drawMassSides()` gives other Level 1 masses the same bands
-and line. `CityBuildings3D.drawShadow()` projects real roof vertices to the
-ground along the sun into a cached world-space path. In Level 1 the 2D pass
+large roof planes; `drawMassSides()` gives other masses in a cel level the same
+bands and line. `CityBuildings3D.drawShadow()` projects real roof vertices to the
+ground along the sun into a cached world-space path. In a cel level the 2D pass
 owns sun shadows even with the WebGL rig active: `glRigOwnsSunShadows()` is
-false and `uSunCast` skips the march, so never add a second caster there.
-Level 1 figures cast their real pose: `celFigureCast3D()` redraws the posed
+false and `uSunCast` skips the march, so never add a second caster there. Ask
+`glRigActive()`, not `glRigOwnsSunShadows()`, when the question is whether the
+rig is running (the lamp haze budget in `drawNightLights()` got that wrong).
+Cel figures cast their real pose: `celFigureCast3D()` redraws the posed
 Player3D snapshot through a `cast` matrix (ground shear, or a per-face wall
 fold queued for `celFigureWallFlush()`), at low resolution with four offset
 taps for the soft edge. `celFigureModelCasts()` decides whether the model or
@@ -3841,13 +3851,14 @@ The test is made where the pixel lands on the ground, never at the body part's
 height: a figure casts as 21 units tall and small blocks are 17 to 26, so a
 true 3D test left figures fully lit inside most shadows. `_celShadeHeight()`
 must stay the height the painted shadow is thrown from (the roof's perimeter).
-Level 1's block buildings stand in storeys: `buildingRise()` sorts them into
-`CITY_RISE_STOREY` (27/33/39, capped at `CITY_RISE_TOP` and at 28% of the
-footprint, never lower than the generic formula, preset `_rise` untouched) so
-they are taller than the people beside them and the skyline has steps. The top
-still clears `BUILDING_GAP_MIN` through the lean. The roof kit's facade adds a
-row of windows per storey, and `CEL_SHADOW_REACH` is 2.0 to match.
-A Level 1 block building is drawn in two parts, not sorted as one piece:
+A cel level's city blocks stand in storeys: `buildingRise()` sorts them into
+`CITY_RISE_STOREY` (27/33/39, mixed by the level's `storeys`, capped at
+`CITY_RISE_TOP` and at 28% of the footprint, never lower than the generic
+formula, preset `_rise` untouched) so they are taller than the people beside
+them and the skyline has steps. The top still clears `BUILDING_GAP_MIN`
+through the lean. The roof kit's facade adds a row of windows per storey, and
+`CEL_SHADOW_REACH` is 2.0 to match.
+A cel level's block building is drawn in two parts, not sorted as one piece:
 `drawDepthSorted()` paints the walls of every split building first, then the
 sorted street (figures, props, other masses), then the roofs (`_massPart` 1
 and 2, honoured by `CityBuildings3D.draw()` and the generic block branch of
@@ -3860,8 +3871,33 @@ figure is near (`_roofEdge`): on every roof it cost a third of the pass. A
 figure's wall shadow for a split building is flushed at once
 (`celFigureWallFlushNow()`), under the figure. `check-depth.js` holds the
 schedule.
+**Trees cast their crowns.** In a cel level `celTreeShadow()` drops each
+tree's bole and its own crown contour, swept as one polygon from
+`FOREST_CROWN_LOW` to the highest bough, into a cached world-space path, joined
+into one per-frame union by the sorted pass's shadow pre-pass and filled once
+(`celTreeShadowBegin`/`celTreeShadowFlush`), so overlapping crowns are not
+shaded twice. Do not add the boughs back as separate polygons: they lie inside
+the crown's shadow and were the entire cost of the union fill. Generic `TREE`/`PINE`/`SNAG` decor
+takes the same path. Trees throw at `CEL_TREE_REACH` (1.35, the rig's own
+slope), not the buildings' 2.0, because a tree's rise is its real height, and
+at `CEL_TREE_SHADE` of a wall's tone. Each crown shading the ground is also
+recorded for figures: `celTreeShadeAt()` on the CPU and up to six ellipses
+(`uShadeDisc`, `uShadeSpan`, `uShadeLeaf`) in the Player3D shader, the same
+segment-against-ellipse test, which `check-cel-levels.js` holds to agree with
+the painted shadow. The soft `forestContactShadow` capsule and the generic
+painted oval stand down wherever a crown has been cast.
+**The Undercity's city is its walled streets.** Its `city(b)` excludes the
+ruins and burnt shells the streamer scatters through the forest (chunk solids
+outside `CITY_DENSE` ground), which keep their own art and height but still
+take cel walls, ink and a cel shadow. Its roof kit paints `UNDERCITY_PALETTE`
+(soot slate, tar, verdigris, soot brick), and one window in eleven is lit
+after dark: the grid is down.
 Do not go back to a whole-figure tint or fade for model-drawn figures. Every
-Level 1 shadow takes its colour from `celShadowRGB()` (the sky-derived slate
-the game always used); do not hard-code a hue. Airborne units, beasts and vehicles
-keep their ovals. Do not change `BIOMES[1].pal` for style:
-the city's ground colours stay as authored.
+cel shadow takes its colour from `celShadowRGB(x, y)` (the sky-derived slate
+the game always used, or a level's own hue at that point: the Undercity's
+forest keeps the teal its floor was always shaded in); do not hard-code a hue.
+Every cel shadow that writes `drawingContext.fillStyle` directly puts the
+previous style back afterwards, or p5's cached fill goes stale and a later
+`fill()` of the same colour is skipped. Airborne units, beasts and vehicles
+keep their ovals. Do not change `BIOMES[1].pal` or `BIOMES[2].pal` for style:
+the cities' ground colours stay as authored.

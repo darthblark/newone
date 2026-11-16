@@ -26,7 +26,7 @@ Morning light across a courtyard district:
   building, and rebuilt only when the sun moves. Other block buildings use a
   hulled shadow in the same tone and length (`CEL_SHADOW_REACH`).
 - **One sun caster.** In Level 1 the 2D pass owns sun shadows even when the
-  WebGL light rig is running (`celCityScene()`, `uSunCast`). The rig skips its
+  WebGL light rig is running (`celScene()`, `uSunCast`). The rig skips its
   shadow ray march there and keeps relief shading, specular and lamp shadows.
 - **Figure shadows.** Humanoids cast a shadow of their actual pose
   ([preview](previews/level1-figure-shadows.png)):
@@ -111,8 +111,11 @@ Morning light across a courtyard district:
 - **Colours.** The city's ground palette (`BIOMES[1].pal`) is unchanged. Roof-kit
   material colours are saturated once per building plan (`vivid`).
 
-All of it is gated on `currentLevel === 1 && currentBiome === 1`; other levels
-draw exactly as before.
+All of it was first gated on `currentLevel === 1 && currentBiome === 1`. It is
+now the system levels are drawn with: a level joins by having an entry in
+`CEL_LEVELS`, read through `celScene()` / `celLevel()`. The Undercity is the
+second; see [Level 2](level2-cel-depth.md). Levels without an entry draw
+exactly as before.
 
 ## Cost
 

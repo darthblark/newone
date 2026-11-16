@@ -61,6 +61,12 @@ const game = fs.readFileSync(process.env.GAME_JS || path.join(__dirname, '..', '
           forestFloorPainter=native;
           return drawingContext.getImageData(0,0,width,height).data;
         }
+        // The Undercity is a cel level, so the figure casts its own posed
+        // shadow -- from the Blender model once that has drawn once, and from
+        // the capsule skeleton on the very first draw before it is ready. One
+        // warm-up paint keeps that first-frame switch out of a comparison that
+        // is about floor styles.
+        paint(false,false);
         for(const scenario of scenarios){
           colorMode(...scenario.mode);p5.VERSION=scenario.unknown?'unverified':version;
           ellipseMode(scenario.corner?CORNER:CENTER);angleMode(scenario.degrees?DEGREES:RADIANS);

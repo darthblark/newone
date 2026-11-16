@@ -120,8 +120,16 @@ for(const fixture of [{x:0,y:0,w:150,h:120,isHouse:true},{x:0,y:0,w:200,h:160,is
 }
 ctx.__cityFixture={x:0,y:0,w:0,h:100,isBlockBuilding:true};
 ok(P('CityBuildings3D.plan(__cityFixture)')===null,'an empty footprint cannot create invalid render geometry');
-for(const biome of [2,3,8]){
+for(const biome of [3,8]){
  ctx.__cityFixture=buildings[0];probe(`currentLevel=currentBiome=${biome};`);
  ok(P('CityBuildings3D.profile(__cityFixture)')===null,'city Blender art does not replace another biome');
 }
+// The Undercity is a cel level (CEL_LEVELS): its walled streets take the kit,
+// and the ruins the streamer scatters through its forest do not.
+probe('currentLevel=currentBiome=2;authoredChunks=null;');
+ctx.__cityFixture={x:600,y:600,w:180,h:150,isBlockBuilding:true,details:[],style:1};
+ok(P('CityBuildings3D.profile(__cityFixture)')==='quay_house','the Undercity\'s streets take the kit in their own materials');
+ok(P('CityBuildings3D.plan(__cityFixture).roofs')==='UNDERCITY','in the Undercity\'s palette');
+ctx.__cityFixture={x:-3000,y:600,w:180,h:150,isBlockBuilding:true,details:[],style:1,chunkKey:'-3,0,4',isChunkSolid:true};
+ok(P('CityBuildings3D.profile(__cityFixture)')===null,'a forest ruin keeps its own painter');
 console.log(checks+' Blender city geometry, projection, eave depth, cache, scope and eight native placement/key checks passed');

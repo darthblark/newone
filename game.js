@@ -6286,7 +6286,7 @@ function drawDepthSorted() {
   masses.length = 0;
   const roofs = _depthRoofs;
   roofs.length = 0;
-  const split = typeof celCityScene === 'function' && celCityScene();
+  const split = typeof celScene === 'function' && celScene();
   _sandbagDepthPieces.length = 0;
   _forestCrowns.length = 0;
   for (let i = 0; i < activeBuildings.length; i++) {
@@ -6345,10 +6345,19 @@ function drawDepthSorted() {
 
   // Cast shade belongs to the floor. Keep it below actors, then depth-sort
   // rooted bark with feet while the raised foliage waits for the upper pass.
-  for (let i = 0; i < masses.length; i++) {
-    if (forestRaisedCrown(masses[i]) || forestStandingFloorProp(masses[i]))
-      paintForestClutter(window, masses[i], frameCount, 'shadow');
-  }
+  // In a cel level every crown's shadow joins one path, filled once at the
+  // end (celTreeShadow), and the other standing trees cast theirs here too
+  // rather than with their own art, where it would land on a figure already
+  // drawn north of them.
+  const celTrees = split;
+  if (celTrees) celTreeShadowBegin();
+  try {
+    for (let i = 0; i < masses.length; i++) {
+      const m = masses[i];
+      if (forestRaisedCrown(m) || forestStandingFloorProp(m)) paintForestClutter(window, m, frameCount, 'shadow');
+      else if (celTrees && m.t !== undefined && CANOPY_MASS[m.t] && !m.forestSpecies) celTreeShadow(m, false);
+    }
+  } finally { if (celTrees) celTreeShadowFlush(); }
 
   const actors = _depthActors;
   drawFrontierCanyonRailShadows(window);
@@ -49020,7 +49029,7 @@ function withBakedSun(fn) {
 const BUILDING_RISE_MAX   = 26;
 const BUILDING_SHADOW_MAX = 24;
 const BUILDING_GAP_MIN    = 90;
-// Level 1's block heights: two, three and four storeys. See buildingRise().
+// A cel level's block heights: two, three and four storeys. See buildingRise().
 const CITY_RISE_STOREY = [27, 33, 39];
 const CITY_RISE_TOP    = 40;
 
@@ -49130,10 +49139,15 @@ function buildingRise(b) {
   // width, because a lean longer than the thing leaning is a slab that fell
   // over. Nothing is ever made LOWER than it was, a preset _rise never gets
   // here, and warehouses stay sheds.
-  if (typeof currentLevel !== 'undefined' && currentLevel === 1 && currentBiome === 1 &&
-      b.isBlockBuilding && !b.isBiomeProp && !b.isLandmark && !b.isHouse && !b.isBuiltStructure) {
+  //
+  // Every cel level builds its city this way (CEL_LEVELS); each has its own
+  // mix of heights, and only its city blocks take part -- the Undercity's
+  // forest ruins keep the height they always had.
+  const celLv = b.isBlockBuilding && !b.isBiomeProp && !b.isLandmark && !b.isHouse && !b.isBuiltStructure &&
+    typeof celCityBlock === 'function' && celCityBlock(b) ? celLevel() : null;
+  if (celLv) {
     const shed = b.cityArchitecture === 4 || (b.cityArchitecture === undefined && b.style === 3);
-    const tier = shed ? 0 : r01 < 0.42 ? 0 : r01 < 0.78 ? 1 : 2;
+    const tier = shed ? 0 : r01 < celLv.storeys[0] ? 0 : r01 < celLv.storeys[1] ? 1 : 2;
     const jitter = ((h >>> 7) & 255) / 255 * 3 - 1.5;
     const want = CITY_RISE_STOREY[tier] + jitter;
     b._rise = Math.max(b._rise, Math.min(CITY_RISE_TOP, foot * 0.28, want));
@@ -49221,7 +49235,7 @@ function drawMassSides(x0, y0, x1, y1, lx, ly, cr, cg, cb, mullion) {
   // flat bands -- cool in shade, warm in sun -- and every face carries an ink
   // line. The stroke rides the quads that were already being drawn, so it adds
   // no draw calls; see CityBuildings3D for the roof-kit half of the same look.
-  const cel = celCityScene();
+  const cel = celScene();
   const face = (nx, ny) => {
     const d = -(nx * LIGHT_DX + ny * LIGHT_DY);
     if (cel) {
@@ -53035,11 +53049,18 @@ function _cfsLayer(ctx, caps, n, ox, oy, soft) {
 // of edge are as soft as four. Either way the layers composite to exactly A
 // where they all overlap.
 const CEL_FIGURE_SOFT2 = [-0.6, 0.7];
-function _cfsPaint(ctx, caps, n, ox, oy, A, fine) {
+// P5 CACHES THE FILL IT LAST SET, AND SKIPS SETTING ONE IT THINKS IS ALREADY
+// THERE. Every cel shadow writes the context's fillStyle directly, behind p5's
+// back, so each one puts the previous style back when it is done: otherwise the
+// next p5 fill() of the colour p5 believes is current is skipped, and whatever
+// it draws comes out in shadow.
+function _cfsPaint(ctx, caps, n, ox, oy, A, fine, wx, wy) {
   const L = fine ? CEL_FIGURE_SOFT : CEL_FIGURE_SOFT2;
   const a = 1 - Math.pow(1 - A, 1 / L.length);
-  ctx.fillStyle = celShadowStyle(a);
+  const was = ctx.fillStyle;
+  ctx.fillStyle = celShadowStyle(a, wx, wy);
   for (let j = 0; j < L.length; j++) _cfsLayer(ctx, caps, n, ox, oy, L[j]);
+  ctx.fillStyle = was;
 }
 // The pose, as capsules in the figure's own ground frame (world axes, origin at
 // the feet). `fall` is 0..1 for a body going down.
@@ -53225,22 +53246,27 @@ function _celShadeRay(list, x, y, z, k) {
   }
   return best;
 }
-// {feet, body}: 0 in the sun, 1 fully shaded.
+// {feet, body}: 0 in the sun, 1 fully shaded -- by a building or by a crown.
 function celFigureShade(c) {
   let rec = _celShadeCache.get(c);
   if (rec && rec.frame === frameCount && rec.x === c.x && rec.y === c.y) return rec;
   if (!rec) { rec = { frame: -1, x: 0, y: 0, feet: 0, body: 0 }; _celShadeCache.set(c, rec); }
   rec.frame = frameCount; rec.x = c.x; rec.y = c.y; rec.feet = 0; rec.body = 0;
-  const k = shadowLengthScale() * CEL_SHADOW_REACH;
+  const SL = shadowLengthScale(), k = SL * CEL_SHADOW_REACH;
   const list = _celShadeGather(c.x, c.y, k * 46);
-  if (!list.length) return rec;
+  const trees = celTreeCount();
+  if (!list.length && !trees) return rec;
   const px = -LIGHT_DY * 3.5, py = LIGHT_DX * 3.5, ax = LIGHT_DX * 3.5, ay = LIGHT_DY * 3.5;
   let f = 0, bd = 0;
   for (let i = 0; i < 5; i++) {
     const ox = i === 1 ? px : i === 2 ? -px : i === 3 ? ax : i === 4 ? -ax : 0;
     const oy = i === 1 ? py : i === 2 ? -py : i === 3 ? ay : i === 4 ? -ay : 0;
-    f += _celShadeRay(list, c.x + ox, c.y + oy, 0, k);
-    bd += _celShadeRay(list, c.x + ox, c.y + oy, CEL_FIGURE_H * 0.55, k);
+    let f0 = list.length ? _celShadeRay(list, c.x + ox, c.y + oy, 0, k) : 0;
+    let b0 = list.length ? _celShadeRay(list, c.x + ox, c.y + oy, CEL_FIGURE_H * 0.55, k) : 0;
+    // A crown shades the ground and so the figure standing on it, judged on
+    // the ground for the same reason the building test is (see Player3D).
+    if (trees) { const t = celTreeShadeAt(c.x + ox, c.y + oy, SL); if (t > f0) f0 = t; if (t > b0) b0 = t; }
+    f += f0; bd += b0;
   }
   rec.feet = f / 5; rec.body = bd / 5;
   return rec;
@@ -53248,6 +53274,249 @@ function celFigureShade(c) {
 function celShadowAlpha() {
   const SD = shadowDensity();
   return Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
+}
+
+// TREES CAST THEIR CROWNS.
+//
+// A tree is the tallest thing in the Undercity's forest by three times, and
+// its shadow is the forest's: the floor of a wood in the afternoon is mostly
+// crowns lying on the ground. In a cel level that shadow is drawn the way a
+// building's is -- one flat tone with a hard edge, in the shape of the thing
+// that cast it -- rather than as a soft capsule or a height-buffer march.
+//
+// Every part is dropped to the ground along the sun at its OWN height: the
+// bole from the root up to where the foliage starts, then the crown's own
+// contour swept from there to its highest bough. So the shadow is a trunk
+// running out from the foot of the tree to a crown with the tree's own ragged
+// outline, stretched by the depth of the foliage. That is the side view of the
+// tree, and the only place this camera ever shows one.
+//
+// A shadow lies on the ground, so its path is in WORLD space and does not
+// depend on the camera at all: cached per tree, rebuilt only when the sun has
+// moved, exactly as the roof kit's are. Every tree in view joins one path that
+// is filled once, so where two crowns' shadows overlap the ground is not shaded
+// twice -- it is one canopy's shade, which is what the floor of a wood is.
+//
+// The throw per unit height is CEL_TREE_REACH, not CEL_SHADOW_REACH. A
+// building's rise is held low so its walls stay out of the street, and its
+// shadow is where the rest of its height is told; a tree's rise IS its height
+// (102-136 before girth), so it throws at the length the scene's shadows were
+// tuned at (the rig's own slope) and a mature fir does not lay its crown four
+// hundred units across the clearing at dawn. And foliage is not a wall:
+// CEL_TREE_SHADE lets a little of the sun through.
+const CEL_TREE_REACH = 1.35;
+const CEL_TREE_SHADE = 0.84;
+const CEL_TREE_MAX = 192;
+// The crowns shading the ground this frame, for the figures standing on it:
+// x, y, rx, ry, lowest and highest crown height.
+const _celTrees = new Float32Array(CEL_TREE_MAX * 6);
+let _celTreeN = 0, _celTreeFrame = -1, _celTreeBatch = false;
+let _celTreeUnion = null, _celTreeX = 0, _celTreeY = 0;
+const _celTreePaths = new WeakMap();
+const _celTreePts = [];
+function celTreeCount() { return _celTreeFrame === frameCount ? _celTreeN : 0; }
+// Opened by drawDepthSorted() before its shadow pre-pass and flushed after it.
+function celTreeShadowBegin() {
+  _celTreeFrame = frameCount; _celTreeN = 0; _celTreeBatch = true; _celTreeUnion = null;
+}
+function celTreeShadowFlush() {
+  _celTreeBatch = false;
+  const path = _celTreeUnion; _celTreeUnion = null;
+  if (!path || typeof drawingContext === 'undefined' || !drawingContext) return;
+  const A = celShadowAlpha() * CEL_TREE_SHADE;
+  if (A <= 0.004) return;
+  const was = drawingContext.fillStyle;           // see _cfsPaint: p5's cached fill
+  drawingContext.fillStyle = celShadowStyle(A, _celTreeX, _celTreeY);
+  drawingContext.fill(path);
+  drawingContext.fillStyle = was;
+}
+// One polygon into the path, wound the same way as every other, so the
+// nonzero rule unions them.
+function _celTreePoly(path, pts, n) {
+  let area = 0;
+  for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += pts[i * 2] * pts[j * 2 + 1] - pts[j * 2] * pts[i * 2 + 1]; }
+  if (Math.abs(area) < 0.25) return;
+  if (area > 0) { path.moveTo(pts[0], pts[1]); for (let i = 1; i < n; i++) path.lineTo(pts[i * 2], pts[i * 2 + 1]); }
+  else { path.moveTo(pts[(n - 1) * 2], pts[(n - 1) * 2 + 1]); for (let i = n - 2; i >= 0; i--) path.lineTo(pts[i * 2], pts[i * 2 + 1]); }
+  path.closePath();
+}
+// A tapered bar from (ax, ay) to (bx, by): a bole or a limb lying on the ground.
+function _celTreeBar(path, ax, ay, bx, by, w0, w1) {
+  const dx = bx - ax, dy = by - ay, m = Math.hypot(dx, dy);
+  if (m < 0.5) return;
+  const px = -dy / m, py = dx / m, q = _celTreePts;
+  q[0] = ax + px * w0; q[1] = ay + py * w0; q[2] = bx + px * w1; q[3] = by + py * w1;
+  q[4] = bx - px * w1; q[5] = by - py * w1; q[6] = ax - px * w0; q[7] = ay - py * w0;
+  _celTreePoly(path, q, 4);
+}
+// A closed contour (relative to cx, cy) dropped from height z0 and, if z1 is
+// given, swept from there to z1 -- as ONE polygon. A crown's contour is all but
+// convex, and the sweep of a convex outline along one vector is the outline
+// itself split at its two tangents to that vector: the trailing arc stays where
+// z0 put it, the leading arc moves on to z1, and two straight edges join them.
+// That is the crown's own shape, stretched, in a third of the edges the full
+// Minkowski construction (both copies plus a quad per edge) costs -- and the
+// edges are what a software rasteriser pays for when the union is filled.
+function _celTreeSweep(path, cx, cy, xy, n, ox, oy, z0, z1) {
+  const q = _celTreePts;
+  const vx = z1 === undefined ? 0 : ox * (z1 - z0), vy = z1 === undefined ? 0 : oy * (z1 - z0);
+  const bx = cx + ox * z0, by = cy + oy * z0;
+  if (vx * vx + vy * vy < 0.25) {
+    for (let i = 0; i < n; i++) { q[i * 2] = bx + xy[i * 2]; q[i * 2 + 1] = by + xy[i * 2 + 1]; }
+    _celTreePoly(path, q, n);
+    return;
+  }
+  // The tangents: extremes across the sweep.
+  let lo = 0, hi = 0, sLo = Infinity, sHi = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const w = -xy[i * 2] * vy + xy[i * 2 + 1] * vx;
+    if (w < sLo) { sLo = w; lo = i; }
+    if (w > sHi) { sHi = w; hi = i; }
+  }
+  // Which of the two arcs between them leads.
+  let lead = 0;
+  for (let i = lo; i !== hi; i = (i + 1) % n) lead += xy[i * 2] * vx + xy[i * 2 + 1] * vy;
+  for (let i = hi; i !== lo; i = (i + 1) % n) lead -= xy[i * 2] * vx + xy[i * 2 + 1] * vy;
+  const firstLeads = lead > 0;
+  let k = 0;
+  for (let i = lo; ; i = (i + 1) % n) {
+    const m = firstLeads ? 1 : 0;
+    q[k++] = bx + xy[i * 2] + vx * m; q[k++] = by + xy[i * 2 + 1] + vy * m;
+    if (i === hi) break;
+  }
+  for (let i = hi; ; i = (i + 1) % n) {
+    const m = firstLeads ? 0 : 1;
+    q[k++] = bx + xy[i * 2] + vx * m; q[k++] = by + xy[i * 2 + 1] + vy * m;
+    if (i === lo) break;
+  }
+  _celTreePoly(path, q, k >> 1);
+}
+const _celTreeEllipse = new Float64Array(32);
+// The crown, as the figures' shadow test sees it: an ellipse a little inside
+// the painted contour, spanning the heights its foliage occupies. Returned in
+// one reused record.
+const _celTreeShape = { rx: 0, ry: 0, z0: 0, z1: 0, rise: 0 };
+function _celTreeCrown(d, cm) {
+  const s = d.s || 1, R = cm[0] * s, sh = _celTreeShape;
+  sh.rise = R;
+  if (d.forestSpecies) {
+    const cs = d.forestCrownScale === undefined ? 1 : d.forestCrownScale;
+    if (d.forestSpecies === 'CHARRED_SNAG') { sh.rx = sh.ry = 0; return sh; }
+    sh.rx = cm[1] * s * cs * 0.5; sh.ry = cm[2] * s * cs * 0.5;
+    sh.z0 = R * FOREST_CROWN_LOW; sh.z1 = R * 0.98;
+  } else if (d.t === 'SNAG') { sh.rx = sh.ry = 0; }
+  else { sh.rx = cm[1] * s * 0.5; sh.ry = cm[2] * s * 0.5; sh.z0 = R * 0.62; sh.z1 = R; }
+  return sh;
+}
+function _celTreeBuild(d, cm, ox, oy) {
+  const path = new Path2D(), s = d.s || 1, R = cm[0] * s, x = d.x, y = d.y;
+  const fp = forestPropProfile(d), sh = _celTreeCrown(d, cm);
+  const tw = (fp && fp.trunkWidth ? fp.trunkWidth : 10.4) * s * 0.5;
+  if (d.forestSpecies === 'CHARRED_SNAG' || (!d.forestSpecies && d.t === 'SNAG')) {
+    // A bare snag: the bole to its broken top and the limbs off it, each at
+    // the height it leaves the bole.
+    _celTreeBar(path, x, y, x + ox * R * 0.92, y + oy * R * 0.92, tw * 0.9, tw * 0.45);
+    if (d.forestSpecies) {
+      const rot = d.r || 0, seed = d.c || 0, rx = cm[1] * s * 0.5, ry = cm[2] * s * 0.5;
+      for (let i = 0; i < 5; i++) {
+        const a = rot + i * 2.17 + Math.sin(seed * 7 + i) * 0.15, f = 0.25 + i * 0.15;
+        const bx = x + ox * R * f, by = y + oy * R * f, len = 0.50 + i % 2 * 0.18;
+        _celTreeBar(path, bx, by, bx + Math.cos(a) * rx * len, by + Math.sin(a) * ry * len,
+          (2.0 - i * 0.2) * s, 0.8 * s);
+      }
+    }
+    return path;
+  }
+  // The bole, from the root to where the foliage begins.
+  _celTreeBar(path, x, y, x + ox * sh.z0, y + oy * sh.z0, tw, tw * 0.72);
+  if (d.forestSpecies) {
+    // The crown's own contour, swept from where the foliage starts to the
+    // highest bough (sh.z1). The boughs are not cast one by one: each is a
+    // 20-point polygon lying almost wholly inside the crown's shadow, and five
+    // of them per tree were the entire cost of filling the forest's union
+    // (about 6 ms a frame under software rendering, where the crown alone is
+    // indistinguishable from no tree shadows at all) -- while at play zoom the
+    // ragged crown contour already carries the shape.
+    const plan = forestTreePlan(d, sh.rx, sh.ry, d.c || 0, d.forestSpecies, d.r || 0);
+    _celTreeSweep(path, x, y, plan.crown, plan.crown.length >> 1, ox, oy, R * FOREST_CROWN_LOW, sh.z1);
+  } else {
+    const e = _celTreeEllipse;
+    for (let i = 0; i < 16; i++) {
+      const a = i * TWO_PI / 16;
+      e[i * 2] = Math.cos(a) * sh.rx * 0.92; e[i * 2 + 1] = Math.sin(a) * sh.ry * 0.92;
+    }
+    _celTreeSweep(path, x, y, e, 16, ox, oy, sh.z0, sh.z1);
+  }
+  return path;
+}
+// Cast one tree. Returns false when this is not a cel scene (the caller draws
+// whatever it always drew). In the sorted pass's pre-pass it joins the frame's
+// union; anywhere else it is filled at once, in the root frame the forest
+// painter has translated to when `rooted` is set.
+function celTreeShadow(d, rooted) {
+  if (!celScene() || typeof Path2D !== 'function' || typeof drawingContext === 'undefined' || !drawingContext) return false;
+  const cm = forestCanopyMass(d);
+  if (!cm) return false;
+  const SL = shadowLengthScale(), kT = SL * CEL_TREE_REACH;
+  const qx = Math.round(LIGHT_DX * kT * 128) / 128, qy = Math.round(LIGHT_DY * kT * 128) / 128;
+  if (_celTreeFrame !== frameCount) { _celTreeFrame = frameCount; _celTreeN = 0; }
+  const sh = _celTreeCrown(d, cm);
+  if (sh.rx > 0 && _celTreeN < CEL_TREE_MAX) {
+    const o = _celTreeN++ * 6, t = _celTrees;
+    t[o] = d.x; t[o + 1] = d.y; t[o + 2] = sh.rx * 0.86; t[o + 3] = sh.ry * 0.86; t[o + 4] = sh.z0; t[o + 5] = sh.z1;
+  }
+  if (celShadowAlpha() * CEL_TREE_SHADE <= 0.004) return true;    // no sun; nothing to cast
+  // The sorted pass hands over every tree within the decor pad, which reaches
+  // well past the view; a shadow lying wholly outside it is not filled.
+  {
+    const reach = sh.rise * 1.15, pad = Math.max(sh.rx, sh.ry, 12) * 1.25 + 8;
+    const ex = d.x + qx * reach, ey = d.y + qy * reach;
+    if (Math.max(d.x, ex) + pad < viewLeft || Math.min(d.x, ex) - pad > viewRight ||
+        Math.max(d.y, ey) + pad < viewTop || Math.min(d.y, ey) - pad > viewBottom) return true;
+  }
+  let rec = _celTreePaths.get(d);
+  if (!rec || rec.qx !== qx || rec.qy !== qy || rec.s !== d.s || rec.cs !== d.forestCrownScale) {
+    rec = { qx, qy, s: d.s, cs: d.forestCrownScale, path: _celTreeBuild(d, cm, qx, qy) };
+    _celTreePaths.set(d, rec);
+  }
+  if (_celTreeBatch && typeof rec.path.addPath === 'function') {
+    if (!_celTreeUnion) { _celTreeUnion = new Path2D(); _celTreeX = d.x; _celTreeY = d.y; }
+    _celTreeUnion.addPath(rec.path);
+    return true;
+  }
+  // Out of the batch (or no addPath in this browser): fill this one now, in
+  // whichever frame the caller is in -- `rooted` says which.
+  const ctx = drawingContext, A = celShadowAlpha() * CEL_TREE_SHADE;
+  ctx.save();
+  if (rooted) ctx.translate(-d.x, -d.y);
+  ctx.fillStyle = celShadowStyle(A, d.x, d.y);
+  ctx.fill(rec.path);
+  ctx.restore();
+  return true;
+}
+// How shaded the ground at (x, y) is by this frame's crowns: 0 in the sun,
+// CEL_TREE_SHADE under a canopy. The ray from the ground back toward the sun
+// is inside a crown between that crown's two heights or not at all, so it is a
+// segment against an ellipse.
+function celTreeShadeAt(x, y, SL) {
+  const n = celTreeCount();
+  if (!n) return 0;
+  const kT = SL * CEL_TREE_REACH, lx = LIGHT_DX * kT, ly = LIGHT_DY * kT, t = _celTrees;
+  let best = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 6, cx = t[o], cy = t[o + 1], rx = t[o + 2], ry = t[o + 3], z0 = t[o + 4], z1 = t[o + 5];
+    const ax = (x - lx * z0 - cx) / rx, ay = (y - ly * z0 - cy) / ry;
+    const bx = (x - lx * z1 - cx) / rx, by = (y - ly * z1 - cy) / ry;
+    if ((ax > 1.6 && bx > 1.6) || (ax < -1.6 && bx < -1.6) || (ay > 1.6 && by > 1.6) || (ay < -1.6 && by < -1.6)) continue;
+    const ex = bx - ax, ey = by - ay, ee = ex * ex + ey * ey;
+    let u = ee > 1e-9 ? -(ax * ex + ay * ey) / ee : 0;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const r = Math.hypot(ax + ex * u, ay + ey * u);
+    let v = (1 - r) * Math.min(rx, ry) / 5 + 0.5;
+    v = v < 0 ? 0 : v > 1 ? 1 : v;
+    if (v > best) { best = v; if (best >= 1) break; }
+  }
+  return best * CEL_TREE_SHADE;
 }
 
 // THE MODEL CASTS ITS OWN SHADOW.
@@ -53280,15 +53549,23 @@ function _celCastAffine(m, fn) {
 // The nearest building boxes, in the actor's own frame, for Player3D's
 // per-fragment shadow test. One descriptor is reused; Player3D reads it during
 // the draw it is passed to and keeps no reference.
+// Up to six crowns ride along with the four boxes: an ellipse in the actor's
+// frame (discs) and the two heights its foliage spans (spans), both in model
+// units, the heights scaled from the tree's throw to the buildings' so one ray
+// serves both. `leaf` is how dark a crown's shade is against a wall's.
+const CEL_SHADE_DISCS = 6;
 const _celShadeDesc = { boxes: new Float32Array(16), tops: new Float32Array(4), dir: [1, 1, 1],
-  tint: [1, 1, 1], soft: 5 };
+  tint: [1, 1, 1], soft: 5, discs: new Float32Array(4 * CEL_SHADE_DISCS),
+  spans: new Float32Array(2 * CEL_SHADE_DISCS), leaf: 1 };
+const _celShadePick = new Int16Array(CEL_SHADE_DISCS);
 function celFigureShadeBoxes(actor, T, sW, k, day) {
   // The fragment test is axis-aligned, so it needs an unrotated actor frame.
   if (Math.abs(T.b) > 1e-4 * Math.abs(T.a) || Math.abs(T.c) > 1e-4 * Math.abs(T.d)) return null;
   const list = _celShadeGather(actor.x, actor.y, k * 46);
-  if (!list.length) return null;
   const d = _celShadeDesc, sL = Math.abs(T.a) / sW, zs = CEL_FIGURE_H / PLAYER3D_STAND_Z;
   if (!(sL > 0)) return null;
+  const trees = celFigureShadeTrees(actor, d, sL, zs, k);
+  if (!list.length && !trees) return null;
   // Nearest four, to the figure or to the far end of its shadow.
   const tipX = actor.x + LIGHT_DX * k * CEL_FIGURE_H, tipY = actor.y + LIGHT_DY * k * CEL_FIGURE_H;
   let n = 0;
@@ -53320,8 +53597,44 @@ function celFigureShadeBoxes(actor, T, sW, k, day) {
   d.tint[2] = 1 + (CEL_CAST_TINT[2] - 1) * day;
   return d;
 }
+// The crowns nearest the figure or the far end of its own shadow, written into
+// the descriptor. Returns how many.
+function celFigureShadeTrees(actor, d, sL, zs, k) {
+  const n = celTreeCount();
+  let m = 0;
+  if (n) {
+    const kT = shadowLengthScale() * CEL_TREE_REACH, t = _celTrees;
+    const tipX = actor.x + LIGHT_DX * k * CEL_FIGURE_H, tipY = actor.y + LIGHT_DY * k * CEL_FIGURE_H;
+    const pick = _celShadePick, best = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity];
+    for (let i = 0; i < n; i++) {
+      const o = i * 6, zm = (t[o + 4] + t[o + 5]) * 0.5, r = Math.max(t[o + 2], t[o + 3]);
+      // The middle of this crown's shadow, and how far its edge is from us.
+      const sx = t[o] + LIGHT_DX * kT * zm, sy = t[o + 1] + LIGHT_DY * kT * zm;
+      const reach = r + Math.abs(t[o + 5] - t[o + 4]) * kT * 0.5;
+      const q = Math.min(Math.hypot(actor.x - sx, actor.y - sy), Math.hypot(tipX - sx, tipY - sy)) - reach;
+      if (q > 24) continue;
+      for (let j = 0; j < CEL_SHADE_DISCS; j++) {
+        if (q < best[j]) {
+          for (let h = CEL_SHADE_DISCS - 1; h > j; h--) { best[h] = best[h - 1]; pick[h] = pick[h - 1]; }
+          best[j] = q; pick[j] = i; if (m < CEL_SHADE_DISCS) m++;
+          break;
+        }
+      }
+    }
+    const zk = CEL_TREE_REACH / (CEL_SHADOW_REACH * zs);
+    for (let j = 0; j < m; j++) {
+      const o = pick[j] * 6;
+      d.discs[j * 4] = (t[o] - actor.x) / sL; d.discs[j * 4 + 1] = (t[o + 1] - actor.y) / sL;
+      d.discs[j * 4 + 2] = t[o + 2] / sL; d.discs[j * 4 + 3] = t[o + 3] / sL;
+      d.spans[j * 2] = t[o + 4] * zk; d.spans[j * 2 + 1] = t[o + 5] * zk;
+    }
+  }
+  for (let j = m; j < CEL_SHADE_DISCS; j++) { d.spans[j * 2] = 0; d.spans[j * 2 + 1] = -1e6; }
+  d.leaf = CEL_TREE_SHADE;
+  return m;
+}
 function celFigureCast3D(actor, snapshot, ctx, options) {
-  if (!celCityScene() || actor.isCorpse || typeof ctx.getTransform !== 'function') return null;
+  if (!celScene() || actor.isCorpse || typeof ctx.getTransform !== 'function') return null;
   const day = Math.min(1, shadowDensity() * 3.2);
   if (!(day > 0.01)) return null;
   const A = celShadowAlpha();
@@ -53329,7 +53642,7 @@ function celFigureCast3D(actor, snapshot, ctx, options) {
   const T = ctx.getTransform(), det = T.a * T.d - T.b * T.c;
   const sW = zoom * (typeof pixelDensity === 'function' ? pixelDensity() : 1);
   if (!(Math.abs(det) > 1e-9) || !(sW > 0)) return null;
-  { const c = celShadowRGB(); CEL_CAST_COLOR[0] = c[0] / 255; CEL_CAST_COLOR[1] = c[1] / 255; CEL_CAST_COLOR[2] = c[2] / 255; }
+  { const c = celShadowRGB(actor.x, actor.y); CEL_CAST_COLOR[0] = c[0] / 255; CEL_CAST_COLOR[1] = c[1] / 255; CEL_CAST_COLOR[2] = c[2] / 255; }
   const shade = celFigureShadeBoxes(actor, T, sW, k, day);
   if (A > 0.01) {
     // The sun's ground throw, brought into whatever frame the actor is being
@@ -53484,11 +53797,12 @@ function celFigureWallFlush(depth) {
         _celCastAffine(_celCast.matrix, (x, y, z) => _cfsProj(ra * x + rc * y + re, rb * x + rd * y + rf, z * zs));
         _celCastOpts.includeParts = job.model.include; _celCastOpts.excludeParts = job.model.exclude;
         _celCastOpts.resolutionScale = 0.5;
+        { const c = celShadowRGB(job.ox, job.oy); CEL_CAST_COLOR[0] = c[0] / 255; CEL_CAST_COLOR[1] = c[1] / 255; CEL_CAST_COLOR[2] = c[2] / 255; }
         ctx.globalAlpha = job.A;
         Player3D.draw(job.model.snapshot, ctx, _celCastOpts);
       }
       job.model = null;
-    } else _cfsPaint(ctx, job.caps, job.n, job.ox, job.oy, job.A, job.fine);
+    } else _cfsPaint(ctx, job.caps, job.n, job.ox, job.oy, job.A, job.fine, job.ox, job.oy);
     P.wall = 0;
     ctx.restore();
     job.b = null;
@@ -53496,7 +53810,7 @@ function celFigureWallFlush(depth) {
   _cfsJobN = keep;
 }
 function celFigureShadow(c, pose, fall) {
-  if (!celCityScene() || CHAR_AIRBORNE[c.eType] || !ragHumanoid(c.eType) ||
+  if (!celScene() || CHAR_AIRBORNE[c.eType] || !ragHumanoid(c.eType) ||
       c.eType === 'ARMORED' || typeof drawingContext === 'undefined') return false;
   const ctx = drawingContext;
   if (!ctx || typeof ctx.arc !== 'function') return false;
@@ -53507,7 +53821,7 @@ function celFigureShadow(c, pose, fall) {
   const n = celFigureSkeleton(c, pose || null, fall || 0);
   const P = _cfsP;
   P.wall = 0; P.lx = LIGHT_DX * k; P.ly = LIGHT_DY * k;
-  _cfsPaint(ctx, _cfsCaps, n, 0, 0, A, !!c.isPlayer);
+  _cfsPaint(ctx, _cfsCaps, n, 0, 0, A, !!c.isPlayer, c.x, c.y);
   if (_depthOn) { celFigureWalls(c, n, A, k); celFigureWallFlushNow(); }
   return true;
 }
@@ -53538,17 +53852,28 @@ const CEL_SHADOW_REACH = 2.0;
 // biome's sky at about a third -- a dark neutral slate -- and the first comic
 // pass replaced that with a saturated indigo, which read as blue paint on the
 // road. The hue is back to the sky-derived one; only the strength is new.
-// One definition, read by the building shadows, both figure casters and the
-// tint a shaded figure takes.
+// One definition, read by the building shadows, the tree shadows, both figure
+// casters and the tint a shaded figure takes.
+//
+// The point is the caster's, and it is optional. A level can give a place its
+// own shade (CEL_LEVELS.shade): the Undercity's forest keeps the teal its
+// floor was always shaded in, because a slate wash over moss is the one thing
+// that turns a lit wood grey, while its streets keep the slate.
 const _celShadowRGB = [29, 34, 44];
-function celShadowRGB() {
+function celShadowRGB(x, y) {
+  const lv = typeof celLevel === 'function' ? celLevel() : null;
+  const own = lv && lv.shade ? lv.shade(x, y) : null;
+  if (own) {
+    _celShadowRGB[0] = own[0]; _celShadowRGB[1] = own[1]; _celShadowRGB[2] = own[2];
+    return _celShadowRGB;
+  }
   const sky = BIOMES[currentBiome] ? BIOMES[currentBiome].sky : [96, 112, 130];
   _celShadowRGB[0] = Math.round(sky[0] * 0.30); _celShadowRGB[1] = Math.round(sky[1] * 0.30);
   _celShadowRGB[2] = Math.round(sky[2] * 0.34);
   return _celShadowRGB;
 }
-function celShadowStyle(alpha) {
-  const c = celShadowRGB();
+function celShadowStyle(alpha, x, y) {
+  const c = celShadowRGB(x, y);
   return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha.toFixed(4) + ')';
 }
 function drawBiomeShadows() {
@@ -53742,20 +54067,20 @@ function drawBiomeShadows() {
       // the ground pass, UNDER every mass, so a long one cannot be mistaken for
       // part of its neighbour: it runs across the road and disappears beneath
       // whatever stands in its way, which is what a shadow does.
-      const cel = celCityScene() && b.isBlockBuilding;
+      const cel = celScene() && b.isBlockBuilding;
       if (cel) {
         // Firm whenever there is a sun at all. shadowDensity() alone leaves a
         // lightly overcast noon at a third of this, which is a tint rather
         // than a shadow; it still takes the tone to zero by nightfall.
         const celA = Math.min(1, SD * 3.2) * (0.34 + 0.24 * SD);
         if (celA <= 0.004) continue;
-        const celStyle = celShadowStyle(celA);
+        const celStyle = celShadowStyle(celA, b.x, b.y);
         if (cityRoof && CityBuildings3D.drawShadow(b, window, LIGHT_DX * SL * CEL_SHADOW_REACH,
             LIGHT_DY * SL * CEL_SHADOW_REACH, celStyle)) continue;
         const cl = Math.min(84, Math.max(rise, Math.min(w, h) * 0.10)) * SL * CEL_SHADOW_REACH;
         const cdx = LIGHT_DX * cl, cdy = LIGHT_DY * cl;
         // Hull of the silhouette and its offset copy, for any sign of the sun.
-        const ctx2 = drawingContext;
+        const ctx2 = drawingContext, was = ctx2.fillStyle;     // see _cfsPaint
         ctx2.fillStyle = celStyle;
         ctx2.beginPath();
         if ((cdx >= 0) === (cdy >= 0)) {
@@ -53765,7 +54090,7 @@ function drawBiomeShadows() {
           ctx2.moveTo(x1, y0); ctx2.lineTo(x0, y0); ctx2.lineTo(x0 + cdx, y0 + cdy);
           ctx2.lineTo(x0 + cdx, y1 + cdy); ctx2.lineTo(x1 + cdx, y1 + cdy); ctx2.lineTo(x1, y1);
         }
-        ctx2.closePath(); ctx2.fill();
+        ctx2.closePath(); ctx2.fill(); ctx2.fillStyle = was;
         continue;
       }
       const sl = Math.min(shCap, Math.max(cityRoof?cityRoof.maxZ:rise, Math.min(w, h) * 0.10) * 0.95) * SL;
@@ -55085,7 +55410,9 @@ function paintForestClutter(g, d, t, phase) {
     const tw = (fp.trunkWidth || 9) * s;
     const ink = (fp.outline || 1.8) * s;
     if (phase !== 'root' && phase !== 'crown' && phase !== 'wood' && phase !== 'foliage') {
-    if (species === "CHARRED_SNAG") {
+    // A cel level casts the crown itself, in its own shape; see celTreeShadow.
+    if (live && celTreeShadow(d, true)) {}
+    else if (species === "CHARRED_SNAG") {
       if (sd > 0.025) {
         g.stroke(24, 33, 27, 48 * sd); g.strokeWeight(3 * s);
         g.line(0, 0, LIGHT_DX * cm[0] * s * 0.65 * sl,
@@ -55570,8 +55897,10 @@ function paintClutter(g, d, t) {
   const live = (typeof window !== 'undefined' && g === window && BIOME_ACTIVE);
   let sd = 1;
   if (live) {
-    sd = CANOPY_MASS[d.t] && typeof glRigOwnsSunShadows === 'function' &&
-         glRigOwnsSunShadows() ? 0 : shadowDensity();
+    // In a cel level the sorted pass has already cast this tree's crown, in
+    // its own shape (celTreeShadow), so the painted oval would be a second one.
+    sd = CANOPY_MASS[d.t] && (typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows() ||
+         _depthOn && typeof celScene === 'function' && celScene()) ? 0 : shadowDensity();
   }
 
   // A tree stands UP. Its crown is metres above the ground, so of everything in
@@ -59963,7 +60292,7 @@ uniform float uSunPow;
 uniform float uSpec;
 uniform float uShine;
 // 0 when the 2D pass is casting the sun's shadows instead (see
-// celCityScene()): the march is skipped outright and every pixel is treated as
+// celScene()): the march is skipped outright and every pixel is treated as
 // reached by the sun, so relief shading and specular still apply.
 uniform float uSunCast;
 out vec4 oCol;
@@ -60401,24 +60730,84 @@ function glRigActive() {
   return GLRig.ok && GLRig.on && GLRig.w > 0;
 }
 
+// THE COMIC DEPTH SYSTEM, LEVEL BY LEVEL.
+//
+// Stick City was the first level drawn as inked cel solids: banded walls and
+// roofs with an ink line round them, shadows thrown in the shape of the real
+// roof, figures casting their own posed shadow and darkening where a building
+// shades them, walls under the street and roofs over it. The Undercity is the
+// second, and from here on that is the system levels are drawn with. A level
+// joins by having an entry in this table; nothing else in the file names a
+// level number to decide it.
+//
+//   biome     the biome the level is played in. The level and the biome have
+//             to agree, so a level loaded into some other biome's ground (the
+//             visual tools do this) never picks the look up by accident.
+//   city(b)   which block buildings are the CITY -- the ones that take the
+//             Blender roof kit and stand in storeys. Every other block
+//             building in the level still gets cel walls, ink and a cel shadow.
+//   storeys   r01 thresholds splitting the city between two, three and four
+//             storeys (see buildingRise()).
+//   roofs     which material palette the roof kit is painted in.
+//   lit       one window in this many is lit after dark.
+//   shade(x,y) the HUE of a shadow at that point. Every shadow takes it from
+//             here, through celShadowRGB(); none of them hard-codes one.
+//
+// celScene() is the predicate every part of the system reads. It needs a live
+// biome, because the shadows and the sorted pass only exist there; celLevel()
+// is the same question without that, for the parts that are art (the roof
+// kit and the storeys) and are drawn whatever the world is doing.
+const CEL_LEVELS = {
+  1: { biome: 1, city: () => true, storeys: [0.42, 0.78], roofs: 'STICK_CITY', lit: 4,
+       shade: null },
+  // THE UNDERCITY IS TWO PLACES, AND ONLY ONE OF THEM IS A CITY. Inside the
+  // curtain wall are the authored streets; past it is the forest, and the
+  // block buildings the streamer scatters through the forest are ruins --
+  // roofless shells, a burnt-out hamlet -- that a tiled roof would rebuild.
+  // The streets are the solids that did not come out of a chunk, plus any a
+  // chunk generates on CITY_DENSE ground. A burnt shell is never a city
+  // block. The skyline runs a little taller than Stick City's, because a
+  // blackout tenement district is what this sector is; the power is out, so
+  // after dark hardly a window is lit.
+  2: { biome: 2, storeys: [0.30, 0.68], roofs: 'UNDERCITY', lit: 11,
+       city: b => !b.burnt && (!(b.isChunkSolid || b.chunkKey !== undefined) ||
+         layoutFor(2, Math.floor(b.x / CHUNK_W), Math.floor(b.y / CHUNK_W)) === 'CITY_DENSE'),
+       // The forest keeps the teal its own shade always had (forestContactShadow);
+       // the streets keep the slate every other shadow in the game is drawn in.
+       shade: (x, y) => x !== undefined && layoutFor(2, Math.floor(x / CHUNK_W), Math.floor(y / CHUNK_W)) === 'WOODLAND'
+         ? CEL_FOREST_SHADE : null }
+};
+const CEL_FOREST_SHADE = [14, 35, 36];
+function celLevel() {
+  if (typeof currentLevel === 'undefined') return null;
+  const c = CEL_LEVELS[currentLevel];
+  return c && currentBiome === c.biome ? c : null;
+}
+function celScene() {
+  return BIOME_ACTIVE && celLevel() !== null;
+}
+// A block building that is part of a cel level's city: roof kit, storeys.
+function celCityBlock(b) {
+  const c = celLevel();
+  return !!c && !!b && !!b.isBlockBuilding && c.city(b);
+}
+
 // True when the rig, not drawBiomeShadows(), is casting the sun's shadows.
 // Both cast from the same silhouettes, so exactly one of them may run.
 //
-// LEVEL 1 IS THE EXCEPTION, AND IT IS THE 2D PASS THAT KEEPS THE SUN THERE.
+// A CEL LEVEL IS THE EXCEPTION, AND IT IS THE 2D PASS THAT KEEPS THE SUN THERE.
 // Its shadows are comic shadows: one flat tone with a hard vector edge, shaped
-// from the real roof geometry (CityBuildings3D.drawShadow). A march through a
-// height buffer at a fraction of the screen's resolution cannot draw that edge
-// -- snapped hard it comes out as a staircase, most visibly down the length of
-// every lamp post -- and left soft it is not the look. So in Stick City the
-// march is switched off (uSunCast) and the three 2D casters this predicate
-// gates all run, exactly as they do when the rig is absent. Still one pass
-// casting the sun, and twenty height samples per pixel the phone no longer
-// pays for. The rig keeps relief shading, specular and every lamp shadow.
-function celCityScene() {
-  return BIOME_ACTIVE && currentLevel === 1 && currentBiome === 1;
-}
+// from the real roof geometry (CityBuildings3D.drawShadow) and the real crown
+// of every tree (celTreeShadow). A march through a height buffer at a fraction
+// of the screen's resolution cannot draw that edge -- snapped hard it comes
+// out as a staircase, most visibly down the length of every lamp post -- and
+// left soft it is not the look. So in a cel level the march is switched off
+// (uSunCast) and the 2D casters this predicate gates all run, exactly as they
+// do when the rig is absent. Still one pass casting the sun, and twenty height
+// samples per pixel the phone no longer pays for. The rig keeps relief
+// shading, specular and every lamp shadow.
 function glRigOwnsSunShadows() {
-  return GLRIG_OWN_SHADOWS && glRigActive() && BIOME_ACTIVE && !celCityScene();
+  return GLRIG_OWN_SHADOWS && glRigActive() && BIOME_ACTIVE && !celScene();
 }
 
 // Screen-sized targets. Called on init, on window resize and whenever the
@@ -61176,7 +61565,7 @@ function glRigFrame() {
     gl.uniform1f(p._u.uStep0, 3.5);
     gl.uniform1f(p._u.uGrow, 1.14);
     gl.uniform1f(p._u.uPenumbra, 0.10 + 0.55 * skyDiffusion());
-    gl.uniform1f(p._u.uSunCast, celCityScene() ? 0 : 1);
+    gl.uniform1f(p._u.uSunCast, celScene() ? 0 : 1);
     // Direction TOWARD the sun. LIGHT_DX/DY point the way shadows fall, and the
     // shading frame has y up, so x negates and y does not.
     const Lx = -LIGHT_DX, Ly = LIGHT_DY;
@@ -61482,7 +61871,10 @@ function drawNightLights() {
   // shadows and some do not" looked like. Past the budget a fixture keeps its
   // bulb, because you should still be able to see the lamp is on, and loses the
   // spread, because it is not spreading anything.
-  const pooled = (typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows())
+  // Asked of the rig running, not of it owning the sun: in a cel level the 2D
+  // pass casts the sun while the rig still carries every lamp, so the two are
+  // not the same question there.
+  const pooled = (typeof glRigActive === 'function' && glRigActive() && BIOME_ACTIVE)
     ? glRigLightBudget() : LIGHT_BUDGET;
   for (let i = 0; i < lit; i++) {
     const L = src[i];
@@ -69112,6 +69504,15 @@ uniform float uShadeTop[4];
 uniform vec3 uShadeDir;
 uniform float uShadeSoft;
 uniform float uShadeGround;
+// Tree crowns. A crown is not a box standing on the ground: it is foliage
+// between two heights. Each is an ellipse (centre, radii) with the heights it
+// spans in uShadeSpan, already scaled so the same ray serves; a ground point
+// is under it when its ray toward the sun passes inside the ellipse anywhere
+// between those heights -- a segment against an ellipse. uShadeLeaf is how
+// dark a crown's shade is next to a wall's, because leaves let light through.
+uniform vec4 uShadeDisc[6];
+uniform vec2 uShadeSpan[6];
+uniform float uShadeLeaf;
 in vec3 vPos;
 out vec4 oColor;
 float shadeAt(vec2 P) {
@@ -69134,6 +69535,17 @@ float shadeAt(vec2 P) {
     // Both ramps are centred on the painted edge, so the figure is half
     // shaded exactly where the ground's own shadow stops.
     s = max(s, clamp((t1 - t0) / uShadeSoft + 0.5, 0.0, 1.0) * clamp(side, 0.0, 1.0));
+  }
+  for (int i = 0; i < 6; i++) {
+    vec2 sp = uShadeSpan[i];
+    if (sp.y <= 0.0) continue;
+    vec4 d = uShadeDisc[i];
+    vec2 a = (P + uShadeDir.xy * (sp.x / uShadeDir.z) - d.xy) / d.zw;
+    vec2 b = (P + uShadeDir.xy * (sp.y / uShadeDir.z) - d.xy) / d.zw;
+    vec2 ab = b - a;
+    float t = clamp(-dot(a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    float r = length(a + ab * t);
+    s = max(s, clamp((1.0 - r) * min(d.z, d.w) / uShadeSoft + 0.5, 0.0, 1.0) * uShadeLeaf);
   }
   return s;
 }
@@ -69426,7 +69838,7 @@ void main() {
       gl.linkProgram(program);gl.deleteShader(vertex);gl.deleteShader(fragment);
       if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program)||'Player shader link failed');
       stats.programCreates++;uniforms={};
-      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint','uShadeBox','uShadeTop','uShadeDir','uShadeSoft','uShadeGround'])
+      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint','uShadeBox','uShadeTop','uShadeDir','uShadeSoft','uShadeGround','uShadeDisc','uShadeSpan','uShadeLeaf'])
         uniforms[name]=gl.getUniformLocation(program,name);
       pipeline.stage='initialization';
       for(const name of Object.keys(asset.meshes)) {
@@ -69493,6 +69905,7 @@ void main() {
   // real geometry in its real pose, so the shadow cannot disagree with the
   // figure. Painted as one flat colour; the caller owns alpha and softness.
   const castScratch=new Float32Array(16),noShadeTops=new Float32Array([-1e6,-1e6,-1e6,-1e6]);
+  const noShadeSpans=new Float32Array([0,-1e6,0,-1e6,0,-1e6,0,-1e6,0,-1e6,0,-1e6]);
   function castMatrix(c,m) {
     const o=castScratch;
     for(let col=0;col<4;col++) {
@@ -69683,8 +70096,11 @@ void main() {
         gl.uniform4fv(uniforms.uShadeBox,shade.boxes);gl.uniform1fv(uniforms.uShadeTop,shade.tops);
         gl.uniform3f(uniforms.uShadeDir,shade.dir[0],shade.dir[1],shade.dir[2]);
         gl.uniform1f(uniforms.uShadeSoft,shade.soft);gl.uniform1f(uniforms.uShadeGround,cast?1:0);
+        if(shade.spans){gl.uniform4fv(uniforms.uShadeDisc,shade.discs);gl.uniform2fv(uniforms.uShadeSpan,shade.spans);
+          gl.uniform1f(uniforms.uShadeLeaf,shade.leaf);}
+        else gl.uniform2fv(uniforms.uShadeSpan,noShadeSpans);
       } else {
-        gl.uniform3f(uniforms.uTint,1,1,1);gl.uniform1fv(uniforms.uShadeTop,noShadeTops);
+        gl.uniform3f(uniforms.uTint,1,1,1);gl.uniform1fv(uniforms.uShadeTop,noShadeTops);gl.uniform2fv(uniforms.uShadeSpan,noShadeSpans);
         gl.uniform3f(uniforms.uShadeDir,1,1,1);gl.uniform1f(uniforms.uShadeSoft,1);gl.uniform1f(uniforms.uShadeGround,0);
       }
       const light=sampleLighting(snapshot,transform,options.lighting);
@@ -70395,7 +70811,9 @@ const CityBuildings3D = (() => {
     draws:0,faces:0,heightDraws:0,heightFaces:0,outlines:0,inkFaces:0,shadowBuilds:0,shadowDraws:0};
   const asset=()=>typeof CITY3D_ASSET!=='undefined'?CITY3D_ASSET:null;
   function profile(b) {
-    if(typeof currentLevel==='undefined'||currentLevel!==1||currentBiome!==1||!b||!b.isBlockBuilding||
+    // Every cel level's city takes the kit; see CEL_LEVELS for which blocks
+    // those are.
+    if(typeof celCityBlock!=='function'||!b||!b.isBlockBuilding||!celCityBlock(b)||
         b.isGovFortress||b.isGiantBarrier||b.isHouse||b.isLandmark||b.isBuiltStructure||
         b.isTower||b.isBiomeProp||b.forestHuntingLodge||b.undergroundWall||b.hqWall)return null;
     const a=b.cityArchitecture;
@@ -70427,7 +70845,8 @@ const CityBuildings3D = (() => {
     // the rows are what say how many floors a building has.
     const storeys=plan.profile==='quay_warehouse'?1:
       Math.min(4,Math.max(2,b.cityStoreys||2,r>=37.5?4:r>=31.5?3:2));
-    const canal=typeof cityHasCanal==='function'&&cityHasCanal(1,Math.floor(b.y/CHUNK_W));
+    // Stick City's doors face its canal. No other city has one.
+    const canal=plan.roofs==='STICK_CITY'&&typeof cityHasCanal==='function'&&cityHasCanal(1,Math.floor(b.y/CHUNK_W));
     const front=canal?(b.y<cityCanalY(1,Math.floor(b.y/CHUNK_W),b.x)?1:-1):
       ((Math.abs(Math.floor(b.x/120)+Math.floor(b.y/120))%2)?1:-1);
     // Counter-clockwise in world XY/Z, with outward wall normals.
@@ -70460,10 +70879,11 @@ const CityBuildings3D = (() => {
   function plan(b) {
     const name=profile(b),data=asset(),model=data&&data.models&&data.models[name];
     if(!model||!(b.w>0)||!(b.h>0))return null;
-    const rise=buildingRise(b),old=cache.get(b);
+    const rise=buildingRise(b),old=cache.get(b),lv=celLevel(),roofs=lv?lv.roofs:'STICK_CITY';
     if(old&&old.asset===data&&old.profile===name&&old.x===b.x&&old.y===b.y&&old.w===b.w&&
-        old.h===b.h&&old.rise===rise&&old.style===b.style&&old.burnt===!!b.burnt){stats.cacheHits++;return old;}
+        old.h===b.h&&old.rise===rise&&old.style===b.style&&old.burnt===!!b.burnt&&old.roofs===roofs){stats.cacheHits++;return old;}
     const current={asset:data,profile:name,x:b.x,y:b.y,w:b.w,h:b.h,rise,maxZ:rise+model.bounds[1][2],style:b.style,burnt:!!b.burnt,
+      roofs,lit:lv?lv.lit:4,
       faces:[],roofFaces:[],bodyFaces:[],facadeFaces:[],bounds:[0,0,0,0],roofBounds:[0,0,0,0]};
     // A long house has its ridge along its long axis, rather than stretching a
     // short ridge across a whole tenement wing. Ground bounds remain identical.
@@ -70528,7 +70948,28 @@ const CityBuildings3D = (() => {
     }
     stats.projections++;return p;
   }
+  // THE UNDERCITY IS THE SAME KIT IN ITS OWN MATERIALS. Its walls are the four
+  // it always had (wet concrete, soot brick, rendered block, corrugated steel)
+  // and its roofs are what survives out here: soot slate rather than
+  // terracotta, tar for membrane, copper gone to verdigris, grimed trim and
+  // glass that has not been cleaned since the grid went down. Lifted above the
+  // flat values the sector's old boxes were painted in, because the cel bands
+  // take a third off the shaded faces and value range is what makes a solid
+  // read; still the darkest city in the game by a wide margin.
+  const UNDERCITY_PALETTE={roof_tile:[92,98,112],roof_tile_dark:[62,67,79],roof_metal:[82,118,108],
+    roof_metal_dark:[48,70,68],roof_membrane:[66,69,74],brick:[112,72,60],stone:[132,128,116],
+    trim:[164,152,126],glass:[38,74,88],glass_highlight:[96,140,146],metal:[104,114,112],
+    metal_dark:[44,52,56],plant:[58,94,62]};
   function materialColor(p,f) {
+    if(p.roofs==='UNDERCITY'){
+      if(f.material==='wall')return p.style===1?[118,72,58]:p.style===2?[138,130,110]:p.style===3?[72,92,104]:[114,120,128];
+      if(f.material==='frame')return [44,50,50];
+      if(f.material==='window')return [36,70,84];
+      if(f.material==='window_highlight')return [102,138,140];
+      if(f.material==='door')return [72,58,44];
+      if(f.material==='shutter')return [94,108,110];
+      return UNDERCITY_PALETTE[f.material]||[104,110,108];
+    }
     const palette=p.asset.palette;
     if(f.material==='wall')return p.style===1?[151,92,70]:p.style===2?[190,180,155]:p.style===3?[96,118,127]:[164,174,171];
     if(f.material==='frame')return [57,66,65];
@@ -70594,7 +71035,7 @@ const CityBuildings3D = (() => {
         if(!f.visible)return;
         const n=f.normal,c=f.color,diffuse=Math.max(0,(-n[0]*dx-n[1]*dy+n[2]*.9)/1.34536);
         const band=celBand(f,diffuse);
-        const lit=f.kind==='facade'&&f.material==='window'&&daylight<.48&&Math.floor(f.meanZ+b.x+b.y)%4===0;
+        const lit=f.kind==='facade'&&f.material==='window'&&daylight<.48&&Math.floor(f.meanZ+b.x+b.y)%p.lit===0;
         const key=band+'|'+Math.round(dayK*64)+'|'+lit+'|'+p.burnt;
         if(f.colorKey!==key){f.colorKey=key;
           const t=(f.kind==='wall'?CEL_WALL:f.kind==='facade'||f.material==='trim'||f.material==='stone'?CEL_TRIM:CEL_ROOF)[band];
@@ -70689,7 +71130,8 @@ const CityBuildings3D = (() => {
       }
       p.shadowPath=path;p.shadowOx=qx;p.shadowOy=qy;stats.shadowBuilds++;
     }
-    ctx.fillStyle=style;ctx.fill(p.shadowPath);stats.shadowDraws++;return true;
+    // p5 caches the fill it last set; put the context's back (see _cfsPaint).
+    const was=ctx.fillStyle;ctx.fillStyle=style;ctx.fill(p.shadowPath);ctx.fillStyle=was;stats.shadowDraws++;return true;
   }
   function paintHeight(g,b,wet=0) {
     const p=project(b),ctx=g&&(g.drawingContext||g);if(!p||!ctx||typeof ctx.fill!=='function')return false;
@@ -70879,7 +71321,8 @@ const CityQuayProps3D = (() => {
       }
       p.shadowPath=path;p.shadowOx=qx;p.shadowOy=qy;stats.shadowBuilds++;
     }
-    ctx.fillStyle=style;ctx.fill(p.shadowPath);stats.shadowDraws++;return true;
+    // p5 caches the fill it last set; put the context's back (see _cfsPaint).
+    const was=ctx.fillStyle;ctx.fillStyle=style;ctx.fill(p.shadowPath);ctx.fillStyle=was;stats.shadowDraws++;return true;
   }
   function paintHeight(g,b,wet=0) {
     const p=project(b),ctx=g&&(g.drawingContext||g);if(!p||!ctx||typeof ctx.fill!=='function')return false;
