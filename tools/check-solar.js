@@ -177,13 +177,28 @@ console.log('\n== day length ==');
   ok('the White Silence: a polar night in June, a midnight sun in December',
      JSON.stringify(dh(5, 'SUMMER')) === '[12,12]' && JSON.stringify(dh(5, 'WINTER')) === '[0,24]');
   const day = (b, se, h) => { at(b, se, h); return P('daylight()'); };
-  ok('daylight() follows the sun: dark at 07:00 in a Stick City December, light at 05:00 in June',
-     day(1, 'WINTER', 7) < 0.05 && day(1, 'WINTER', 12) === 1 && day(1, 'SUMMER', 5) > 0.5 && day(1, 'SUMMER', 21) === 0);
-  ok('and the polar night stays dark at noon, the midnight sun light at midnight',
-     day(5, 'SUMMER', 12) < 0.05 && day(5, 'WINTER', 0) > 0.3, 'the December midnight sun stands 3.4 degrees up');
-  const edge = P('(() => { const t = 0.10 / 0.36; return t * t * (3 - 2 * t); })()');
-  ok('at an equinox sunrise and sunset are as light as the old 06:00 and 18:00',
-     [1, 2, 3, 4, 5].every(b => near(day(b, 'SPRING', 6), edge, 1e-6) && near(day(b, 'SPRING', 18), edge, 1e-6)));
+  ok('daylight() follows the sun: night at 06:30 in a Stick City December, light at 05:00 in June',
+     day(1, 'WINTER', 6.5) === 0 && day(1, 'WINTER', 12) === 1 && day(1, 'SUMMER', 5) > 0.5 && day(1, 'SUMMER', 22) === 0);
+  // Twilight: the sky keeps light while the sun is less than TWILIGHT_EL down.
+  const TL = P('TWILIGHT_LIGHT');
+  ok('at sunset the sky holds the twilight level, at every latitude',
+     [1, 2, 3, 4, 5].every(b => near(day(b, 'SPRING', 6), TL, 1e-6) && near(day(b, 'SPRING', 18), TL, 1e-6)), TL);
+  {
+    // A June evening at Stick City, a minute at a time: down through twilight
+    // to night with no step.
+    let prev = day(1, 'SUMMER', 19.5), worst = 0, mono = true;
+    for (let m = 19.5 * 60 + 1; m <= 22 * 60; m++) {
+      const v = day(1, 'SUMMER', m / 60);
+      worst = Math.max(worst, Math.abs(v - prev)); if (v > prev + 1e-12) mono = false; prev = v;
+    }
+    ok('and fades through it to night without a step', mono && prev === 0 && worst < 0.03,
+       'largest change ' + worst.toFixed(3) + ' per game minute');
+  }
+  const polar = day(5, 'SUMMER', 12);
+  ok('the White Silence\'s polar noon is a twilight: lit, with the sun down and no shadow',
+     polar > 0.15 && polar < 0.45 && P('shadowDensity()') === 0 && P('SUN.elev') < 0, polar.toFixed(2));
+  ok('and its December midnight sun is light at midnight', day(5, 'WINTER', 0) > 0.3, 'the sun 3.4 degrees up');
+  ok('the alien worlds have no twilight shelf', (at(6, 'SPRING', 18.5), P('daylight()')) === 0);
   at(1, 'SPRING', 12);
   const h1 = P('sunHeight()');
   ok('a temperate equinox noon is nearly full noon light, a 55-degree sun is full',

@@ -62151,6 +62151,10 @@ function drawClimateReadout() {
   else if (d > 0.1)             { phase = "DUSK";  pc = [255, 170, 90]; }
   // Before noon a horizon sun is coming up, after it is going down.
   if (phase === "DUSK" && worldHour() < 12) phase = "DAWN";
+  // The sun is down but the sky is still lit: civil twilight, which is all a
+  // polar winter's day ever is.
+  _skyTerms();
+  if (SUN.solar && SUN.elev < 0 && d > 0.1) { phase = "TWILIGHT"; pc = [150, 170, 235]; }
 
   // On narrow phones the old pause margin pushed climate text across the
   // health bars. Keep it in the remaining right lane; wider views retain
@@ -62346,8 +62350,9 @@ const DAY_SPAN_H  = 12;                  // hours of daylight (06:00 -> 18:00)
 //  So a December day at Stick City runs from about 07:50 to 16:10 and a June
 //  one from about 04:15 to 19:45, the Green Line keeps a twelve-hour day all
 //  year, and the White Silence has a midnight sun in December and a polar
-//  night in June. At an equinox the sun rises at 06:00 and sets at 18:00 at
-//  every latitude, which is exactly the clock the game had before.
+//  twilight in June (TWILIGHT: the sky keeps some light while the sun is
+//  less than eight degrees down). At an equinox the sun rises at 06:00 and
+//  sets at 18:00 at every latitude, as on the clock the game had before.
 //
 //  The hour itself is still the clock's (solar time, noon at 12:00), and the
 //  few things keyed to a fixed hour rather than to the light -- the weather
@@ -62384,6 +62389,10 @@ const SUN_FADE_EL = 0.05;
 // sin of the elevation that counts as a full noon sun for brightness and
 // colour (see DAY LENGTH).
 const SUN_HIGH_SIN = Math.sin(55 * Math.PI / 180);
+// Twilight: how far below the horizon the sky still holds light, and how much
+// daylight() it holds at the horizon itself (see TWILIGHT in _skyTerms).
+const TWILIGHT_EL = 8 * Math.PI / 180;
+const TWILIGHT_LIGHT = 0.42;
 
 // 0 at the March equinox, 0.25 the June solstice, 0.5 the September equinox,
 // 0.75 the December solstice. Advanced by updateWorldClock(), seeded once per
@@ -62591,6 +62600,20 @@ function _skyTerms() {
   const t = (a + 0.10) / 0.36;
   const k = t < 0 ? 0 : t > 1 ? 1 : t;
   _skDay = k * k * (3 - 2 * k);          // smoothstep
+
+  // TWILIGHT. The sky stays lit for a while after the sun has gone: civil
+  // twilight, while the sun is less than TWILIGHT_EL below the horizon. So a
+  // dusk lingers instead of dropping straight into night, and the White
+  // Silence's polar winter -- the noon sun three degrees down -- is a dim blue
+  // twilight rather than a night. A floor under the curve, a function of the
+  // elevation alone, so it runs continuously through the seasons. No sun means
+  // no shadows: shadowDensity()'s horizon fade still takes them out.
+  if (lat !== null) {
+    let tw = (el + TWILIGHT_EL) / TWILIGHT_EL;
+    tw = tw < 0 ? 0 : tw > 1 ? 1 : tw;
+    tw = TWILIGHT_LIGHT * tw * tw * (3 - 2 * tw);
+    if (tw > _skDay) _skDay = tw;
+  }
 
   _skHeight = a < 0 ? 0 : a > 1 ? 1 : a;
 

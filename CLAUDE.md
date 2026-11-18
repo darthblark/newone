@@ -1217,14 +1217,17 @@ scalars on `SUN` — no allocation, nothing per caster. From them:
 everything that reads it: lamps, lit windows, ambient), `goldenHour()` and `sunHeight()`
 (key-light colour) come from the real elevation, so a Stick City December day runs
 07:55→16:05, June 04:05→19:55, the Green Line stays near twelve hours, and the White Silence
-has a polar night in June and a midnight sun in December. `SUN_HIGH_SIN` (sin 55°) is what
+has a polar night in June and a midnight sun in December. **Twilight** is a floor under
+`daylight()` while the sun is less than `TWILIGHT_EL` (8°) below the horizon, from
+`TWILIGHT_LIGHT` (0.42) at the horizon to night: dusks linger, and the polar night is a dim
+twilight around noon rather than a night (no sun, so no shadows). `SUN_HIGH_SIN` (sin 55°) is what
 counts as a full noon for brightness and colour, because the palettes were authored against
 a noon of 1 — measured against the zenith a temperate equinox noon would be gold. `SUN.up` is
 the true sin(elevation) for the shading frames. The player's flashlight is on while the sun
 is below the horizon; `seedWorldClock()` picks the hour against the starting sector's
 sunrise and sunset for the seeded season (`solarDayHours()`); `worldTemperatureF()` swings
 the authored (equinox) bands by `SEASON_TEMP_PER_DEG` per degree of latitude, a month behind
-the sun. At an equinox all of it is the old 06:00→18:00 day at every latitude. The hour
+the sun. At an equinox the sun rises at 06:00 and sets at 18:00 at every latitude, as the old clock did. The hour
 stays solar time, and the few things keyed to a fixed hour (the weather roll, the city's
 21:00 night checks) keep it.
 

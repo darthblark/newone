@@ -110,12 +110,20 @@ the night wash (and so the lamps, the lit windows and the ambient level),
 | Stick City, December | 07:55 | 16:05 |
 | any sector, equinox | 06:00 | 18:00 |
 | Green Line | within about 20 minutes of 06:00 / 18:00 all year | |
-| White Silence, June | polar night | |
+| White Silence, June | polar night: a twilight noon | |
 | White Silence, December | midnight sun (3.4° up at midnight) | |
 
 The hour on the clock is solar time, noon at 12:00, so the White Silence's
-December midnight is dim and gold rather than dark, and its June noon is a
-deep twilight with the flashlight on.
+December midnight is dim and gold rather than dark.
+
+**Twilight.** The sky keeps light while the sun is less than 8° below the
+horizon (`TWILIGHT_EL`), from `TWILIGHT_LIGHT` (0.42 of daylight) at the
+horizon down to night. It is a floor under the daylight curve and a function
+of the elevation alone, so it runs continuously through the year: every dusk
+lingers a little before night falls, and the White Silence's polar winter --
+the noon sun 3.4° down at 70°S -- is a dim blue twilight (about 0.25) around
+noon rather than a night. No sun means no shadows, and the flashlight stays
+on. The climate readout says TWILIGHT while it lasts.
 
 Calls made here:
 
@@ -127,9 +135,9 @@ Calls made here:
   sin(elevation) for anything that needs a direction.
 - **The flashlight follows the sun**, which is the old 18:00 to 06:00 at an
   equinox and keeps the clock on the alien worlds.
-- **The polar night stays dark.** Around the June solstice the White Silence
-  gets a few in-game days without a sunrise (roughly four real hours); the
-  flashlight covers it.
+- **The polar night is a twilight.** Around the June solstice the White
+  Silence gets a few in-game days without a sunrise (roughly four real hours).
+  Its noons are a dim twilight rather than full night; the flashlight is on.
 - **A run opens in its own daylight.** `seedWorldClock()` picks the season,
   then the hour against that day's sunrise and sunset where the run starts
   (`solarDayHours()`), with the old weights. At an equinox the spans are
