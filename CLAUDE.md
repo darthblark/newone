@@ -1244,10 +1244,11 @@ caster's own throw on the side the sun is on, and nowhere else. It is used by
 (`propShadowReach()`), the actor cull (`actorShadowReach()`), and `drawDecor()`, which
 hands trees off screen toward the sun to the cel pre-pass for their crown shadow alone
 (`_standShadow`) rather than painting them. `_celShadeGather()` samples along the ray
-toward the sun for long throws. The rig's height buffer is larger than the screen by
-`GLRIG_HGT_MARGIN` (half the short side), slid toward the sun each frame
-(`glRigHgtWindow()`, `uHgtXf` in every shader that reads it); where the rig casts the sun
-the view globals are grown to match for the length of `glRigPaintHeight()`. The march runs `GLRIG_SUN_STEPS` 28 and stops
+toward the sun for long throws. Where the rig casts the sun, its height buffer is larger
+than the screen by `GLRIG_HGT_MARGIN` (half the short side), slid toward the sun each frame
+(`glRigHgtWindow()`, `uHgtXf` in every shader that reads it), and the view globals are grown
+to match for the length of `glRigPaintHeight()`. In a cel level the margin is zero
+(`glRigHgtMarginPx()`); crossing between the two reallocates the buffer between frames. The march runs `GLRIG_SUN_STEPS` 28 and stops
 once the ray clears `uHeightMax`.
 
 `node tools/check-solar.js` covers all of the above. See

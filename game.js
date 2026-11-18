@@ -61126,7 +61126,7 @@ function glRigResize() {
 
   const w = Math.max(64, Math.round(width * dens * scale));
   const h = Math.max(64, Math.round(height * dens * scale));
-  if (w === GLRig.w && h === GLRig.h) return;
+  if (w === GLRig.w && h === GLRig.h) { glRigResizeHeight(w, h); return; }
 
   GLRig.w = w; GLRig.h = h;
   GLRig.canvas.width = w;
@@ -61149,11 +61149,21 @@ function glRigResize() {
   // with an edge finer than a wall -- so it runs at half the rig's resolution.
   // Every ray-march sample and every occlusion resample reads it, so this is
   // the single most effective knob on the rig's bandwidth.
-  // hw x hh is the SCREEN's share of it; the buffer is that plus a margin on
-  // each axis that glRigPaintHeight() slides toward the sun (GLRIG_HGT_MARGIN).
+  glRigResizeHeight(w, h);
+}
+// hw x hh is the SCREEN's share of the height buffer; the buffer is that plus
+// a margin on each axis that glRigPaintHeight() slides toward the sun
+// (GLRIG_HGT_MARGIN) -- only where the rig casts the sun. In a cel level the
+// 2D pass casts it and the margin would be pixels cleared and uploaded every
+// frame for nothing (measured: about a tenth of an emulated Stick City frame),
+// so crossing between the two kinds of sector reallocates the buffer, once.
+function glRigHgtMarginPx(hw, hh) {
+  return GLRIG_OWN_SHADOWS && BIOME_ACTIVE && !celScene() ? Math.round(Math.min(hw, hh) * GLRIG_HGT_MARGIN) : 0;
+}
+function glRigResizeHeight(w, h) {
   const hw = Math.max(64, Math.round(w * 0.5));
   const hh = Math.max(64, Math.round(h * 0.5));
-  const hm = Math.round(Math.min(hw, hh) * GLRIG_HGT_MARGIN);
+  const hm = glRigHgtMarginPx(hw, hh);
   if (!GLRig.hgt || GLRig.hw !== hw || GLRig.hh !== hh || GLRig.hm !== hm) {
     if (GLRig.hgt) GLRig.hgt.remove();
     GLRig.hgt = createGraphics(hw + hm, hh + hm);
@@ -61829,6 +61839,9 @@ function glRigFrame() {
   // a frame -- but the watchdog runs at the END of glRigFrame(), which is
   // inside one, with the rig's framebuffers still bound. It asks for the resize
   // now and gets it here, before any of this frame's GL state exists.
+  // The height buffer's sun margin follows the sector (glRigHgtMarginPx), and
+  // is reallocated here, between frames, like a tier change.
+  if (GLRig.hgt && glRigHgtMarginPx(GLRig.hw, GLRig.hh) !== GLRig.hm) GLRig.resize = true;
   if (GLRig.resize) { GLRig.resize = false; glRigResize(); if (!glRigActive()) return false; }
   const gl = GLRig.gl;
   const W = GLRig.w, H = GLRig.h;

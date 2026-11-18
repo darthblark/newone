@@ -194,8 +194,10 @@ out as the camera panned.
   `GLRIG_HGT_MARGIN` (half the short side) and the extra is slid toward the
   sun each frame (`glRigHgtWindow()`). Texel size is unchanged, so on-screen
   output is the same; every shader that reads the buffer maps screen uv
-  through `uHgtXf`. The margin is only painted where the rig casts the sun;
-  in a cel level it is left as bare ground. The march now runs up to 28 steps (about 950 world units)
+  through `uHgtXf`. The margin only exists where the rig casts the sun; in a
+  cel level the buffer is the screen's size, as before
+  (`glRigHgtMarginPx()`), and crossing between the two kinds of sector
+  reallocates it once, between frames. The march now runs up to 28 steps (about 950 world units)
   and stops as soon as the ray rises above the tallest height the buffer can
   hold, so a high sun pays for a few steps and only a low one walks them all.
 
