@@ -6062,6 +6062,7 @@ let _forestCrowns = [];    // reused; raised wood, then foliage above ground act
 // of it.
 const DECOR_STANDING = { TREE: 1, PINE: 1, SNAG: 1, KRUMMHOLZ: 1 };
 let _standDecor = [];       // reused; standing decor queued by drawDecor()
+let _standShadow = [];      // reused; off-screen trees whose shadow reaches the view
 
 function depthSortActive() { return BIOME_ACTIVE || currentLevel === 8 || currentLevel === 9; }
 
@@ -6214,6 +6215,19 @@ function isAirborneEnemy(e) {
 // complete rotated walk/bite silhouette (including stroke and contact shade)
 // fits inside 40 units; 64 leaves room for antialiasing and the relief scale.
 // Other models and every knockdown/boxing case retain the generic allowance.
+// How far a biome prop's own shadow can throw now. The longest castShadow()
+// length any prop passes is 62 and the mast's and the watchtower's own shadows
+// run a little further; nothing at all when the rig is casting instead.
+function propShadowReach() {
+  if (!BIOME_ACTIVE || (typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows())) return 0;
+  return 100 * shadowLengthScale();
+}
+// How far a standing figure's shadow throws now: the cel figures cast their
+// whole height at CEL_SHADOW_REACH, everyone else a contact oval.
+function actorShadowReach() {
+  if (!BIOME_ACTIVE) return 0;
+  return (celScene() ? CEL_FIGURE_H * CEL_SHADOW_REACH : 12 * 1.35) * shadowLengthScale();
+}
 function actorRenderCullPad(c) {
   return currentLevel===9&&c&&c.eType==='OCCULT_ZOMBIE'&&c.bodyW===21&&c.bodyH===27&&
     !(c.stunTimer>0)&&!c.knockedOut&&!c.isCorpse&&!boxingActive(c)?64:150;
@@ -6287,6 +6301,7 @@ function drawDepthSorted() {
   const roofs = _depthRoofs;
   roofs.length = 0;
   const split = typeof celScene === 'function' && celScene();
+  const propReach = propShadowReach();
   _sandbagDepthPieces.length = 0;
   _forestCrowns.length = 0;
   for (let i = 0; i < activeBuildings.length; i++) {
@@ -6294,8 +6309,10 @@ function drawDepthSorted() {
     if (b.isForestTimber) continue; // Collision companion; live decor owns the entire visible volume.
     // The same cull both draw functions apply. Doing it once here keeps the
     // sort down to what is actually on screen, which is a fraction of the
-    // 1500-unit ring activeBuildings holds.
-    if (!inView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 150)) continue;
+    // 1500-unit ring activeBuildings holds. A biome prop paints its own shadow
+    // with its art, so it is kept while that shadow can reach the view.
+    if (!inShadowView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 150,
+        b.isBiomeProp ? propReach : 0)) continue;
     if (b.isUBarrier) {
       if(!(b.hp>0))continue;
       // Short horizontal slices keep local depth without changing how the
@@ -6357,15 +6374,19 @@ function drawDepthSorted() {
       if (forestRaisedCrown(m) || forestStandingFloorProp(m)) paintForestClutter(window, m, frameCount, 'shadow');
       else if (celTrees && m.t !== undefined && CANOPY_MASS[m.t] && !m.forestSpecies) celTreeShadow(m, false);
     }
-  } finally { if (celTrees) celTreeShadowFlush(); }
+    // Trees off the screen toward the sun: their crown's shadow, nothing else.
+    if (celTrees) for (let i = 0; i < _standShadow.length; i++) celTreeShadow(_standShadow[i], false);
+  } finally { if (celTrees) celTreeShadowFlush(); _standShadow.length = 0; }
 
   const actors = _depthActors;
   drawFrontierCanyonRailShadows(window);
+  // The world frame, for a figure's wall shadow painted from inside the
+  // figure's own frame (celFigureWallFlushNow).
+  _depthWorldT = typeof drawingContext !== 'undefined' && drawingContext &&
+    typeof drawingContext.getTransform === 'function' ? drawingContext.getTransform() : null;
   // Walls first: nothing that stands on the ground is ever behind one.
   if (roofs.length) {
     if (roofs.length > 1) roofs.sort((p, q) => p._depthKey - q._depthKey);
-    _depthWorldT = typeof drawingContext !== 'undefined' && drawingContext &&
-      typeof drawingContext.getTransform === 'function' ? drawingContext.getTransform() : null;
     _massPart = 1;
     try { drawBuildings(roofs, 0, roofs.length); } finally { _massPart = 0; }
     _depthSplitOn = true;
@@ -9642,7 +9663,7 @@ function resetRunState() {
   _mountScanFrame = -99; _mountScanResult = null;
   _depthActors.length = 0; _depthMasses.length = 0; _depthOn = false;
   _legacyActorsQueued = false; _airborneActors.length = 0;
-  _forestCrowns.length = 0; _standDecor.length = 0; _boxingWorldEffects.length = 0;
+  _forestCrowns.length = 0; _standDecor.length = 0; _standShadow.length = 0; _boxingWorldEffects.length = 0;
   resetForestBrushInteractions();
   _waterFrame = -1; _waterList.length = 0; _outerFrame = -99; _emitFrame = -1;
   weather = null; isRaining = false; lastWeatherRollHour = -1;
@@ -12828,6 +12849,8 @@ function removeResidentHarvestable(b) {
   // that same-frame reference too rather than showing a final ghost log.
   for (let i = _standDecor.length - 1; i >= 0; i--)
     if (forestHarvestDecorMatches(_standDecor[i], b)) _standDecor.splice(i, 1);
+  for (let i = _standShadow.length - 1; i >= 0; i--)
+    if (forestHarvestDecorMatches(_standShadow[i], b)) _standShadow.splice(i, 1);
 }
 
 // One entry point, so a pick, a rifle round and a rocket all take the same path
@@ -15322,6 +15345,26 @@ function waterDepthAt(x, y) {
 function inView(x, y, pad = 100) {
   return x >= viewLeft - pad && x <= viewRight + pad && y >= viewTop - pad && y <= viewBottom + pad;
 }
+// THE VIEW, GROWN TOWARD THE SUN, FOR ANYTHING THAT CASTS A SHADOW.
+//
+// A shadow can be on screen while the thing casting it is not. A caster at
+// (x, y) throws its shadow to (x, y) + (LIGHT_DX, LIGHT_DY) * reach, and it can
+// touch the view whenever either end of that throw can -- so a shadow pass culls
+// against the view grown by the caster's own throw on the side the SUN is on,
+// and on no other side. Once a dawn or a polar sun throws four and a half times
+// a caster's height (SUN_SHADOW_MAX), culling casters by their footprint alone
+// made long shadows blink in and out at the edge of the screen as it panned.
+function inShadowView(x, y, pad, reach) {
+  const sx = LIGHT_DX * reach, sy = LIGHT_DY * reach;
+  return x + (sx > 0 ? sx : 0) >= viewLeft - pad && x + (sx < 0 ? sx : 0) <= viewRight + pad &&
+         y + (sy > 0 ? sy : 0) >= viewTop - pad && y + (sy < 0 ? sy : 0) <= viewBottom + pad;
+}
+// The tallest throw-per-sun of anything that casts: a mature forest crown,
+// 136 high before girth, at its reach (CEL_TREE_REACH x 1.15) and a fat girth.
+// maxShadowLength() is that at the current sun -- the margin a pass needs when
+// it cannot ask each caster (the rig's height field, a whole chunk of decor).
+const SHADOW_THROW_MAX = 136 * 1.3 * 1.35 * 1.15;
+function maxShadowLength() { return SHADOW_THROW_MAX * shadowLengthScale(); }
 // Ground-level lots: water, hardstanding and crop rows. These are surfaces,
 // not masses, so they belong under the shadow pass rather than in
 // drawBuildings() -- which is why that function skips them. Lifted out of
@@ -30583,7 +30626,7 @@ function updateEntities() {
       }
 
       
-      if (e.hp>0 && !e.dead && inView(e.x, e.y, actorRenderCullPad(e))) actorShow(e);
+      if (e.hp>0 && !e.dead && inShadowView(e.x, e.y, actorRenderCullPad(e), actorShadowReach())) actorShow(e);
       if (e.hp <= 0 && !e.dead) { e.dead = true; processKill(e.x, e.y, false, e.eType, e.isFriendly, e); enemiesList.splice(i, 1); if (totalKills < MAX_KILLS) setTimeout(spawnSingleEnemy, 100); }
   }
 
@@ -36626,6 +36669,9 @@ function saveGame() {
         // --- BIOME WORLD PERSISTENCE ---
         // Chunk layout is fully procedural, so only the deltas need storing.
         worldTimeMs: typeof worldTimeMs !== 'undefined' ? worldTimeMs : 0,
+        // The time of year rides with the time of day, lock included.
+        seasonProgress: typeof seasonProgress !== 'undefined' ? seasonProgress : 0,
+        seasonLocked: typeof seasonLocked !== 'undefined' ? !!seasonLocked : false,
         // The sky, and where it is in its own cycle. isRaining alone is not the
         // weather: lastWeatherRollHour is what says whether this hour's roll has
         // already happened, and without it a reload either re-rolls immediately
@@ -36672,6 +36718,9 @@ function loadGame() {
         if (state.biomeState) biomeState = state.biomeState;
         if (state.currentBiome) currentBiome = state.currentBiome;
         if (typeof state.worldTimeMs === 'number') worldTimeMs = state.worldTimeMs;
+        if (typeof state.seasonProgress === 'number' && Number.isFinite(state.seasonProgress))
+          seasonProgress = _wrapSeason(state.seasonProgress);
+        if (typeof state.seasonLocked === 'boolean') seasonLocked = state.seasonLocked;
         window.nm0AmbushClearedStatus = state.nm0AmbushClearedStatus || false;
         window.northGateBreached = state.northGateBreached || false;
         window.northGateBreachedStatus = state.northGateBreachedStatus || false;
@@ -36822,6 +36871,9 @@ function loadGame() {
         if (state.biomeState) biomeState = state.biomeState;
         if (state.currentBiome) currentBiome = state.currentBiome;
         if (typeof state.worldTimeMs === 'number') worldTimeMs = state.worldTimeMs;
+        if (typeof state.seasonProgress === 'number' && Number.isFinite(state.seasonProgress))
+          seasonProgress = _wrapSeason(state.seasonProgress);
+        if (typeof state.seasonLocked === 'boolean') seasonLocked = state.seasonLocked;
         // Put the sky back where it was, rather than rolling a new one.
         //
         // Loading used to force isRaining false and set lastWeatherRollHour to
@@ -48872,20 +48924,33 @@ class ChunkManager {
   // -- Decor pass (shadows first, then props) -------------------------------
   drawDecor() {
     const stand = _depthOn;
-    if (stand) _standDecor.length = 0;
+    if (stand) { _standDecor.length = 0; _standShadow.length = 0; }
+    // A tree off the edge of the screen can still lay its crown's shadow across
+    // it (inShadowView). In a cel level the sorted pass casts every crown in a
+    // pre-pass of its own, so a tree whose shadow can reach the view but whose
+    // crown cannot is handed over for that alone and never painted.
+    const casts = stand && celScene();
+    const kT = casts ? shadowLengthScale() * CEL_TREE_REACH * 1.15 : 0;
+    const far = casts ? maxShadowLength() : 0, fx = LIGHT_DX * far, fy = LIGHT_DY * far;
     for (const ch of this.chunks.values()) {
       const wx = ch.cx * CHUNK_W, wy = ch.cy * CHUNK_W;
       const chunkPad = this.biome === 2 ? forestChunkDecorPad(ch) : 200;
-      if (wx > viewRight + chunkPad || wx + CHUNK_W < viewLeft - chunkPad) continue;
-      if (wy > viewBottom + chunkPad || wy + CHUNK_W < viewTop - chunkPad) continue;
+      if (wx + (fx < 0 ? fx : 0) > viewRight + chunkPad || wx + CHUNK_W + (fx > 0 ? fx : 0) < viewLeft - chunkPad) continue;
+      if (wy + (fy < 0 ? fy : 0) > viewBottom + chunkPad || wy + CHUNK_W + (fy > 0 ? fy : 0) < viewTop - chunkPad) continue;
       // Cull generously. A tree canopy reaches ~78 units at full scale, so the
       // old +/-60 margin clipped props whose centre had just left the view
       // while their crown was still on screen -- they blinked out at the
       // border instead of sliding off it.
       for (const d of ch.decor) {
         const pad = d.forestSpecies ? forestPropCullPad(d) : 120;
-        if (d.x < viewLeft - pad || d.x > viewRight + pad)  continue;
-        if (d.y < viewTop - pad  || d.y > viewBottom + pad) continue;
+        if (d.x < viewLeft - pad || d.x > viewRight + pad ||
+            d.y < viewTop - pad  || d.y > viewBottom + pad) {
+          if (casts && DECOR_STANDING[d.t]) {
+            const cm = forestCanopyMass(d);
+            if (cm && inShadowView(d.x, d.y, pad, cm[0] * (d.s || 1) * kT)) _standShadow.push(d);
+          }
+          continue;
+        }
         // A tree is handed to the depth sort instead, so the player passes
         // behind its crown rather than standing on it. Outside a sorted level
         // there is nothing to hand it to, so it paints here as it always did.
@@ -52891,19 +52956,40 @@ function castShadow(x, y, w, h, len, alpha) {
   }
   endShape(CLOSE);
 }
+// THE HULL OF A BOX AND ITS SHADOW, FOR ANY SUN.
+//
+// A rectangle and its copy moved by (dx, dy) hull to a hexagon, but WHICH six
+// corners depends on the quadrant the shadow falls into. The old shadow only
+// ever fell down the screen, so every copy of this was written for that and
+// most for down-right alone: a morning shadow (down-left) came out as a
+// bow-tie, and now that a northern noon throws shadows UP the screen
+// (SEASONS AND LATITUDE) an up-left one crossed itself too. One answer, in a
+// reused scratch array: x, y pairs, six of them, convex and in order.
+const _rectHull = new Float64Array(12);
+function rectShadowHull(x0, y0, x1, y1, dx, dy) {
+  const h = _rectHull;
+  // Name the corner the shadow leaves from (a) and the one it leaves behind (b)
+  // on each axis; the hexagon is then the same walk in every quadrant.
+  const ax = dx >= 0 ? x1 : x0, bx = dx >= 0 ? x0 : x1;
+  const ay = dy >= 0 ? y1 : y0, by = dy >= 0 ? y0 : y1;
+  h[0] = bx;      h[1] = by;
+  h[2] = ax;      h[3] = by;
+  h[4] = ax + dx; h[5] = by + dy;
+  h[6] = ax + dx; h[7] = ay + dy;
+  h[8] = bx + dx; h[9] = ay + dy;
+  h[10] = bx;     h[11] = ay;
+  return h;
+}
 function castShadowRect(x, y, w, h, len, alpha, round) {
   if (typeof glRigOwnsSunShadows === 'function' && glRigOwnsSunShadows()) return;
   const L = BIOME_ACTIVE ? len * shadowLengthScale() : len;
   const dx = LIGHT_DX * L, dy = LIGHT_DY * L;
   shadowFill(alpha);
-  // LIGHT_DX and LIGHT_DY are both positive, so the hull of two axis-aligned
-  // rects offset by (+dx, +dy) is always this hexagon -- the same six vertices
-  // drawBiomeShadows() walks for a building.
-  const x0 = x - w / 2, y0 = y - h / 2, x1 = x + w / 2, y1 = y + h / 2;
+  // The same hexagon drawBiomeShadows() walks for a building, whichever way
+  // the sun is (rectShadowHull).
+  const q = rectShadowHull(x - w / 2, y - h / 2, x + w / 2, y + h / 2, dx, dy);
   beginShape();
-  vertex(x0, y0); vertex(x1, y0);
-  vertex(x1 + dx, y0 + dy); vertex(x1 + dx, y1 + dy);
-  vertex(x0 + dx, y1 + dy); vertex(x0, y1);
+  for (let i = 0; i < 12; i += 2) vertex(q[i], q[i + 1]);
   endShape(CLOSE);
 }
 
@@ -53178,8 +53264,14 @@ function _celShadeGather(x, y, reach) {
   const list = _celShadeList; list.length = 0;
   if (typeof colNear !== 'function') return list;
   const span = Math.max(reach * 2, 260);
-  for (let i = 0; i < 9; i++) {
-    const near = colNear(x + (i % 3 - 1) * 150, y + (Math.floor(i / 3) - 1) * 150);
+  // Past the lattice, the cells along the ray back toward the sun: a dawn or a
+  // polar sun throws a wall's shadow several hundred units, so the building
+  // shading this spot can stand well outside the lattice (SUN_SHADOW_MAX).
+  const extra = reach > 260 ? Math.min(6, Math.ceil((reach - 260) / 150)) : 0;
+  for (let i = 0; i < 9 + extra; i++) {
+    const t = 300 + (i - 9) * 150;
+    const near = i < 9 ? colNear(x + (i % 3 - 1) * 150, y + (Math.floor(i / 3) - 1) * 150)
+                       : colNear(x - LIGHT_DX * t, y - LIGHT_DY * t);
     for (let j = 0; j < near.length; j++) {
       const b = near[j];
       if (!b.isBlockBuilding || b.isBiomeProp || !(b.w > 0) || !(b.h > 0) || list.indexOf(b) >= 0) continue;
@@ -53713,7 +53805,9 @@ function _cfsWallJob(b, wall, plane, q, n, ox, oy, A, k, model) {
   job.ex = _cfsWallLean[0]; job.ey = _cfsWallLean[1];
   // A split building's walls are already down, so its share of a shadow is
   // painted at once -- under the figure that casts it, who stands in front.
-  job.key = _depthSplitOn && b._splitMass === true ? -Infinity :
+  // So is a south face's: the figure is south of it, so it sorted after the
+  // building and is about to be drawn over the wall.
+  job.key = (_depthSplitOn && b._splitMass === true) || (wall === 1 && plane >= b.y) ? -Infinity :
     (b._depthKey === undefined ? Infinity : b._depthKey);
   for (let i = 0; i < 8; i++) job.quad[i] = q[i];
 }
@@ -53752,6 +53846,18 @@ function celFigureWalls(c, n, A, k, model) {
           q[0] = x0; q[1] = y0; q[2] = x1; q[3] = y0; q[4] = x1 + lx; q[5] = y0 + ly; q[6] = x0 + lx; q[7] = y0 + ly;
         }
       }
+      // A shadow falling NORTH meets a SOUTH face, which the lean shows on the
+      // buildings in the top half of the view. The old sun never threw north;
+      // a northern noon now does (SEASONS AND LATITUDE). The figure stands in
+      // front of this face, so the building is already drawn and its share of
+      // the shadow goes down at once, under the figure (see _cfsWallJob).
+      if (!wall && uy < -0.12 && ly < -0.5 && c.y > y1 - 1 && c.y - y1 < -uy * reach) {
+        const hit = c.x + ux * (y1 - c.y) / uy;
+        if (hit > x0 - 30 && hit < x1 + 30) {
+          wall = 1; plane = y1;
+          q[0] = x0; q[1] = y1; q[2] = x1; q[3] = y1; q[4] = x1 + lx; q[5] = y1 + ly; q[6] = x0 + lx; q[7] = y1 + ly;
+        }
+      }
       if (!wall && Math.abs(ux) > 0.12 && c.y > y0 - 30 && c.y < y1 + 30) {
         const px = ux > 0 ? x0 : x1;
         if ((ux > 0 ? lx > 0.5 && c.x < px + 1 : lx < -0.5 && c.x > px - 1) && Math.abs(px - c.x) < Math.abs(ux) * reach) {
@@ -53785,7 +53891,7 @@ function celFigureWalls(c, n, A, k, model) {
 // is put back for the length of the call.
 function celFigureWallFlushNow() {
   const ctx = typeof drawingContext !== 'undefined' ? drawingContext : null;
-  if (!_depthSplitOn || !_cfsJobN || !_depthWorldT || !ctx) return;
+  if (!_depthOn || !_cfsJobN || !_depthWorldT || !ctx) return;
   ctx.save();
   try { ctx.setTransform(_depthWorldT); celFigureWallFlush(-Infinity); } finally { ctx.restore(); }
 }
@@ -54036,14 +54142,21 @@ function drawBiomeShadows() {
   const SL = shadowLengthScale(), SD = shadowDensity();
   const sky = BIOMES[currentBiome] ? BIOMES[currentBiome].sky : [30, 36, 48];
   const sr = sky[0] * 0.30, sg = sky[1] * 0.30, sb = sky[2] * 0.34;
+  // The longest any of these throws (see inShadowView): a cel block at its
+  // tallest, or the mast, the tallest thing the other branches cast.
+  const celOn = celScene();
+  const reachCel = 96 * SL * CEL_SHADOW_REACH, reachOther = 66 * SL;
   for (const b of activeBuildings) {
     if (b.isBiomeProp) continue;          // drawn with their own shadows later
     if (b.isTreeTrunk) continue;          // the canopy casts it, not the trunk
     // activeBuildings is a 1500-unit ring rebuilt every ten frames, so most of
     // it is off screen. Every other pass culls; this one was painting a shadow
     // for all of them and letting the rasteriser clip, which on a fill-rate
-    // bound canvas is the expensive way to draw nothing.
-    if (!inView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 120)) continue;
+    // bound canvas is the expensive way to draw nothing. Culled against the
+    // view grown toward the sun, though, or a long shadow from a building just
+    // off the edge would vanish while its tip was still on screen.
+    if (!inShadowView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 120,
+        celOn && b.isBlockBuilding ? reachCel : reachOther)) continue;
     // Water is a hole in the ground, not a mass standing on it. Ponds were
     // falling through to the generic building branch and having a shadow the
     // size of their bounding box painted straight over the surface — and
@@ -54246,13 +54359,9 @@ function drawBiomeShadows() {
           celShadowLayerMark(Math.min(x0, x0 + cdx), Math.min(y0, y0 + cdy), Math.max(x1, x1 + cdx), Math.max(y1, y1 + cdy));
         } else ctx2.fillStyle = celStyle;
         ctx2.beginPath();
-        if ((cdx >= 0) === (cdy >= 0)) {
-          ctx2.moveTo(x0, y0); ctx2.lineTo(x1, y0); ctx2.lineTo(x1 + cdx, y0 + cdy);
-          ctx2.lineTo(x1 + cdx, y1 + cdy); ctx2.lineTo(x0 + cdx, y1 + cdy); ctx2.lineTo(x0, y1);
-        } else {
-          ctx2.moveTo(x1, y0); ctx2.lineTo(x0, y0); ctx2.lineTo(x0 + cdx, y0 + cdy);
-          ctx2.lineTo(x0 + cdx, y1 + cdy); ctx2.lineTo(x1 + cdx, y1 + cdy); ctx2.lineTo(x1, y1);
-        }
+        const hq = rectShadowHull(x0, y0, x1, y1, cdx, cdy);
+        ctx2.moveTo(hq[0], hq[1]);
+        for (let i = 2; i < 12; i += 2) ctx2.lineTo(hq[i], hq[i + 1]);
         ctx2.closePath(); ctx2.fill(); ctx2.fillStyle = was;
         continue;
       }
@@ -54270,13 +54379,9 @@ function drawBiomeShadows() {
       }
 
       fill(sr, sg, sb, 64 * SD);
+      const hq = rectShadowHull(x0, y0, x1, y1, dx, dy);
       beginShape();
-      vertex(x0, y0);
-      vertex(x1, y0);
-      vertex(x1 + dx, y0 + dy);
-      vertex(x1 + dx, y1 + dy);
-      vertex(x0 + dx, y1 + dy);
-      vertex(x0, y1);
+      for (let i = 0; i < 12; i += 2) vertex(hq[i], hq[i + 1]);
       endShape(CLOSE);
     }
   }
@@ -54614,18 +54719,21 @@ const _forestBakedLight = { key: -1, dx: SUN_REF_DX, dy: SUN_REF_DY,
   up: .8, horizon: .6, direct: 1 };
 const _forestSunLight = { key: 0, dx: 0, dy: 0, up: 0, horizon: 1, direct: 0 };
 let _forestSunTime = NaN, _forestSunBiome = null, _forestSunRain = null;
-let _forestSunDx = NaN, _forestSunDy = NaN;
+let _forestSunDx = NaN, _forestSunDy = NaN, _forestSunRev = -1;
 function forestSunLighting() {
   if (_bakingSun) return _forestBakedLight;
   _skyTerms();
   if (_forestSunTime === worldTimeMs && _forestSunBiome === currentBiome &&
-      _forestSunRain === isRaining && _forestSunDx === LIGHT_DX && _forestSunDy === LIGHT_DY)
+      _forestSunRain === isRaining && _forestSunDx === LIGHT_DX && _forestSunDy === LIGHT_DY &&
+      _forestSunRev === _skRev)
     return _forestSunLight;
   _forestSunTime = worldTimeMs; _forestSunBiome = currentBiome; _forestSunRain = isRaining;
-  _forestSunDx = LIGHT_DX; _forestSunDy = LIGHT_DY;
+  _forestSunDx = LIGHT_DX; _forestSunDy = LIGHT_DY; _forestSunRev = _skRev;
   const dx = Math.round(LIGHT_DX * 128) / 128, dy = Math.round(LIGHT_DY * 128) / 128;
-  const up = Math.round(_skHeight * 64) / 64;
-  const direct = Math.round(_skDay * (1 - .85 * _skDiffuse) * 64) / 64;
+  // The real sun's height where there is one (SUN.up is the clock's height
+  // otherwise), and no direct light once it is at the horizon.
+  const up = Math.round(SUN.up * 64) / 64;
+  const direct = Math.round(_skDay * SUN.fade * (1 - .85 * _skDiffuse) * 64) / 64;
   if (dx !== _forestSunLight.dx || dy !== _forestSunLight.dy ||
       up !== _forestSunLight.up || direct !== _forestSunLight.direct) {
     _forestSunLight.key++;
@@ -57345,8 +57453,9 @@ function drawBiomeProps(list, i0, i1) {
     // activeBuildings is a 1500-unit ring, so most of it is off screen on any
     // given frame. Every other pass in the render order culls before it draws;
     // this one was letting the rasteriser clip instead, which on a fill-rate
-    // bound canvas is the expensive way to draw nothing.
-    if (!inView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 150)) continue;
+    // bound canvas is the expensive way to draw nothing. A prop draws its own
+    // shadow, so the view is grown toward the sun by its throw (inShadowView).
+    if (!inShadowView(b.x, b.y, Math.max(b.w || 0, b.h || 0) + 150, propShadowReach())) continue;
     const def = BIOMES[currentBiome] || BIOMES[1];
 
     // Quay hardware keeps its feet on the ground; only its upper vertices
@@ -60218,9 +60327,20 @@ const GLRIG_LIGHTS_MIN = 6;
 // is worth recovering from.
 const GLRIG_SHED_MSG = 'stood down: frame budget';
 
-// Ray march budget for the directional pass. Steps grow geometrically, so 20
-// steps reach ~14x the first step's length -- long enough for a dawn shadow.
-const GLRIG_SUN_STEPS = 20;
+// Ray march budget for the directional pass. Steps grow geometrically, so 28
+// steps reach ~270x the first step's length: about 950 world units, which is a
+// tall crown's shadow under the lowest sun SUN_SHADOW_MAX allows. The march
+// stops as soon as the ray climbs past the tallest thing the buffer can hold,
+// so a high sun pays for a handful of steps and only a low one walks them all.
+const GLRIG_SUN_STEPS = 28;
+
+// How far past the screen the height buffer reaches, as a fraction of the
+// screen's short side, all of it put on the side the sun is on (glRigHgtWindow).
+// A caster just off screen throws its shadow onto it; with the buffer only the
+// size of the screen, a long dawn or polar shadow blinked out at the edge as
+// soon as the thing that cast it left the view. Same texel size as before, so
+// on-screen output is unchanged -- the buffer is simply larger.
+const GLRIG_HGT_MARGIN = 0.5;
 
 // Taps either side of centre in the penumbra filter. 4 gives a 9-tap Gaussian.
 const GLRIG_PCF = 4;
@@ -60353,7 +60473,8 @@ const GLRig = {
   quad: null,
   vao: null,
   w: 0, h: 0,         // rig backing store, pixels
-  hw: 0, hh: 0,       // height buffer, pixels
+  hw: 0, hh: 0,       // the screen's share of the height buffer, pixels
+  hm: 0, hcw: 0, hch: 0, // its margin (GLRIG_HGT_MARGIN) and the whole buffer, pixels
   tier: 0,            // index into GLRIG_SCALES
   lightTier: 0,       // index into GLRIG_LIGHT_TIERS; the watchdog drops this first
   ms: 16,             // smoothed frame time; the light budget is spent against it
@@ -60362,6 +60483,7 @@ const GLRig = {
   fast: 0,
   resize: false,      // a tier change is pending; applied at the TOP of a frame
   lights: [],
+  hgtXf: new Float32Array([1, 1, 0, 0]),   // screen uv -> height-buffer uv (glRigHgtWindow)
   boundTex: [],       // reset every frame; the rig owns these units during it
   failure: ''
 };
@@ -60403,14 +60525,16 @@ uniform sampler2D uNrmAtlas;
 uniform vec2 uTexel;
 uniform float uRelief;
 uniform float uAtlasMix;
+uniform vec4 uHgtXf;
 out vec4 oCol;
 
 void main() {
-  vec4 c = texture(uHgt, vUV);
-  float hl = texture(uHgt, vUV - vec2(uTexel.x, 0.0)).r;
-  float hr = texture(uHgt, vUV + vec2(uTexel.x, 0.0)).r;
-  float hd = texture(uHgt, vUV - vec2(0.0, uTexel.y)).r;
-  float hu = texture(uHgt, vUV + vec2(0.0, uTexel.y)).r;
+  vec2 hp = vUV * uHgtXf.xy + uHgtXf.zw;
+  vec4 c = texture(uHgt, hp);
+  float hl = texture(uHgt, hp - vec2(uTexel.x, 0.0)).r;
+  float hr = texture(uHgt, hp + vec2(uTexel.x, 0.0)).r;
+  float hd = texture(uHgt, hp - vec2(0.0, uTexel.y)).r;
+  float hu = texture(uHgt, hp + vec2(0.0, uTexel.y)).r;
 
   // z = h(x, y)  ->  n = normalize(-dh/dx, -dh/dy, 1)
   vec3 n = normalize(vec3(-(hr - hl) * uRelief, -(hu - hd) * uRelief, 1.0));
@@ -60458,19 +60582,27 @@ uniform float uShine;
 // celScene()): the march is skipped outright and every pixel is treated as
 // reached by the sun, so relief shading and specular still apply.
 uniform float uSunCast;
+// Screen uv -> height-buffer uv: the buffer reaches past the screen toward
+// the sun (GLRIG_HGT_MARGIN), so a caster just off screen still casts.
+uniform vec4 uHgtXf;
 out vec4 oCol;
 
-float marchSun(vec2 uv, float h0) {
+float marchSun(vec2 hp, float h0) {
   float vis = 1.0;
   float t = 0.0;
   float s = uStep0;
+  vec2 dq = uMarchUV * uHgtXf.xy;
   for (int i = 0; i < ${GLRIG_SUN_STEPS}; i++) {
     t += s;
     s *= uGrow;
-    vec2 p = uv + uMarchUV * t;
+    float ray = h0 + uSlope * t;
+    // Above the tallest thing the buffer can hold, nothing further on can
+    // reach the ray: an overhead sun stops here after a few steps, and only a
+    // low one walks the whole march.
+    if (ray > uHeightMax) break;
+    vec2 p = hp + dq * t;
     if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) break;
     float hs  = texture(uHgt, p).r * uHeightMax;
-    float ray = h0 + uSlope * t;
     float over = hs - ray;
     if (over > 0.0) {
       // The penumbra widens with distance from the caster, so a wall's shadow
@@ -60492,12 +60624,13 @@ void main() {
     oCol = vec4(uAmbCol, 1.0);
     return;
   }
-  vec4 hgt = texture(uHgt, vUV);
+  vec2 hp = vUV * uHgtXf.xy + uHgtXf.zw;
+  vec4 hgt = texture(uHgt, hp);
   vec3 N = texture(uNrm, vUV).xyz * 2.0 - 1.0;
   float h0 = hgt.r * uHeightMax;
 
   float ndl = max(dot(N, uSunDir), 0.0);
-  float vis = uSunCast > 0.5 ? marchSun(vUV, h0) : 1.0;
+  float vis = uSunCast > 0.5 ? marchSun(hp, h0) : 1.0;
 
   // Overhead camera: the eye looks straight down, so V is constant and the
   // Blinn-Phong halfway vector costs one normalize for the whole screen.
@@ -60523,10 +60656,11 @@ uniform vec2  uSpanUV;
 uniform float uHeightMax;
 uniform float uLightZ;
 uniform float uGroundZ;
+uniform vec4  uHgtXf;
 out vec4 oCol;
 
 void main() {
-  vec2 p = uLightUV + (vUV * 2.0 - 1.0) * uSpanUV;
+  vec2 p = (uLightUV + (vUV * 2.0 - 1.0) * uSpanUV) * uHgtXf.xy + uHgtXf.zw;
   float h = uGroundZ;
   if (p.x >= 0.0 && p.y >= 0.0 && p.x <= 1.0 && p.y <= 1.0) {
     h = texture(uHgt, p).r * uHeightMax;
@@ -60611,6 +60745,7 @@ uniform vec2  uAim;
 uniform vec2  uCone;
 uniform float uSpill;
 uniform float uSpillR;
+uniform vec4  uHgtXf;
 out vec4 oCol;
 
 void main() {
@@ -60650,7 +60785,7 @@ void main() {
   sh /= wsum;
   if (sh <= 0.002) discard;
 
-  vec4 hgt = texture(uHgt, vUV);
+  vec4 hgt = texture(uHgt, vUV * uHgtXf.xy + uHgtXf.zw);
   vec3 N = texture(uNrm, vUV).xyz * 2.0 - 1.0;
   float h = hgt.r * uHeightMax;
 
@@ -61006,14 +61141,18 @@ function glRigResize() {
   // with an edge finer than a wall -- so it runs at half the rig's resolution.
   // Every ray-march sample and every occlusion resample reads it, so this is
   // the single most effective knob on the rig's bandwidth.
+  // hw x hh is the SCREEN's share of it; the buffer is that plus a margin on
+  // each axis that glRigPaintHeight() slides toward the sun (GLRIG_HGT_MARGIN).
   const hw = Math.max(64, Math.round(w * 0.5));
   const hh = Math.max(64, Math.round(h * 0.5));
-  if (!GLRig.hgt || GLRig.hw !== hw || GLRig.hh !== hh) {
+  const hm = Math.round(Math.min(hw, hh) * GLRIG_HGT_MARGIN);
+  if (!GLRig.hgt || GLRig.hw !== hw || GLRig.hh !== hh || GLRig.hm !== hm) {
     if (GLRig.hgt) GLRig.hgt.remove();
-    GLRig.hgt = createGraphics(hw, hh);
+    GLRig.hgt = createGraphics(hw + hm, hh + hm);
     GLRig.hgt.pixelDensity(1);
     GLRig.hgt.noSmooth();
-    GLRig.hw = hw; GLRig.hh = hh;
+    GLRig.hw = hw; GLRig.hh = hh; GLRig.hm = hm;
+    GLRig.hcw = hw + hm; GLRig.hch = hh + hm;
   }
 }
 
@@ -61325,16 +61464,47 @@ function glRigForestFloorHeight(g, d, profile = forestSunRelief(d)) {
   g.pop();
 }
 
+// Where the screen sits inside the height buffer this frame: the margin goes
+// on the side the sun is on, in proportion, because that is where the casters
+// whose shadows can reach the screen are standing. Written into GLRig.hgtXf
+// for the shaders; returns the margin left of and above the screen, in px.
+const _glHgtWin = [0, 0];
+function glRigHgtWindow() {
+  const m = GLRig.hm || 0;
+  const mL = Math.round(m * (0.5 + 0.5 * LIGHT_DX)), mT = Math.round(m * (0.5 + 0.5 * LIGHT_DY));
+  const x = GLRig.hgtXf;
+  x[0] = GLRig.hw / GLRig.hcw; x[1] = GLRig.hh / GLRig.hch;
+  // uv y runs up and the buffer is uploaded flipped: the offset is the margin
+  // BELOW the screen.
+  x[2] = mL / GLRig.hcw; x[3] = (m - mT) / GLRig.hch;
+  _glHgtWin[0] = mL; _glHgtWin[1] = mT;
+  return _glHgtWin;
+}
 function glRigPaintHeight() {
   const g = GLRig.hgt;
   const k = GLRig.hw / width;          // css px -> height buffer px
   const wet = (typeof isRaining !== 'undefined' && isRaining) ? 1 : 0;
   _glForestCanopies.length = 0;
+  const win = glRigHgtWindow(), mL = win[0], mT = win[1], m = GLRig.hm || 0;
 
   g.clear();
   if (glRigHeightOrigin() < 0) g.background(glRigHeightByte(0), 0, 0, 255);
+  // Everything below culls against the view. For the length of the paint the
+  // view IS the buffer, margin included, so a caster standing in the margin is
+  // painted and casts onto the screen. Only where the rig is casting the sun:
+  // in a cel level the 2D pass casts it, and the margin is left as bare ground
+  // -- which is what a point light's occlusion read there before it existed.
+  const wpx = 1 / (k * zoom), grow = glRigOwnsSunShadows() ? 1 : 0;
+  const vL = viewLeft, vR = viewRight, vT = viewTop, vB = viewBottom;
+  viewLeft -= mL * wpx * grow; viewRight += (m - mL) * wpx * grow;
+  viewTop -= mT * wpx * grow; viewBottom += (m - mT) * wpx * grow;
+  try { glRigPaintHeightInto(g, k, wet, mL, mT); }
+  finally { viewLeft = vL; viewRight = vR; viewTop = vT; viewBottom = vB; }
+}
+function glRigPaintHeightInto(g, k, wet, mL, mT) {
   g.push();
   g.noStroke();
+  g.translate(mL, mT);
   g.scale(k * zoom);
   g.translate(-camX, -camY);
 
@@ -61513,6 +61683,14 @@ function glRigDraw(gl, prog, rect) {
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
+// The height buffer, with where the screen sits inside it (uHgtXf: screen uv
+// to buffer uv, as scale.xy and offset.zw). Set once a frame by
+// glRigPaintHeight().
+function glRigBindHgt(gl, prog) {
+  glRigBindTex(gl, prog, 'uHgt', 1, GLRig.tex.height);
+  const x = GLRig.hgtXf;
+  gl.uniform4f(prog._u.uHgtXf, x[0], x[1], x[2], x[3]);
+}
 function glRigBindTex(gl, prog, name, unit, tex) {
   const loc = prog._u[name];
   if (loc === undefined) return;
@@ -61706,9 +61884,9 @@ function glRigFrame() {
     gl.useProgram(p);
     gl.bindFramebuffer(gl.FRAMEBUFFER, GLRig.fbo.normal.fbo);
     gl.viewport(0, 0, LW, LH);
-    glRigBindTex(gl, p, 'uHgt', 1, GLRig.tex.height);
+    glRigBindHgt(gl, p);
     glRigBindTex(gl, p, 'uNrmAtlas', 2, GLRig.tex.atlas);
-    gl.uniform2f(p._u.uTexel, 1 / GLRig.hw, 1 / GLRig.hh);
+    gl.uniform2f(p._u.uTexel, 1 / GLRig.hcw, 1 / GLRig.hch);
     gl.uniform1f(p._u.uRelief, relief);
     gl.uniform1f(p._u.uAtlasMix, GLRig.atlasMix || 0);
     glRigDraw(gl, p, GLRIG_FULL);
@@ -61718,7 +61896,7 @@ function glRigFrame() {
     gl.useProgram(p);
     gl.bindFramebuffer(gl.FRAMEBUFFER, GLRig.fbo.light.fbo);
     gl.viewport(0, 0, LW, LH);
-    glRigBindTex(gl, p, 'uHgt', 1, GLRig.tex.height);
+    glRigBindHgt(gl, p);
     glRigBindTex(gl, p, 'uNrm', 3, GLRig.fbo.normal.tex);
     gl.uniform2f(p._u.uMarchUV, marchU, marchV);
     gl.uniform1f(p._u.uSlope, slope);
@@ -61754,7 +61932,10 @@ function glRigFrame() {
     const scL = lum(sc[0], sc[1], sc[2]) / 255 || 1;
     gl.uniform3f(p._u.uSunCol, sc[0] / 255 / scL, sc[1] / 255 / scL, sc[2] / 255 / scL);
 
-    const sunPow = 0.55 * d * key;
+    // A sun at or below the horizon lights nothing directly, whatever the
+    // clock says about the sky (sunFade(): SEASONS AND LATITUDE). Flat ground
+    // stays at amb either way -- the normalisation below takes it back out.
+    const sunPow = 0.55 * d * key * (underground ? 1 : sunFade());
     const ambScalar = Math.max(0.04, amb - sunPow * Lz);
 
     // Shade keeps a trace of the biome's own sky rather than going to dead
@@ -61802,7 +61983,7 @@ function glRigFrame() {
       gl.useProgram(p);
       gl.bindFramebuffer(gl.FRAMEBUFFER, GLRig.fbo.occ.fbo);
       gl.viewport(0, 0, GLRIG_OCC, GLRIG_OCC);
-      glRigBindTex(gl, p, 'uHgt', 1, GLRig.tex.height);
+      glRigBindHgt(gl, p);
       gl.uniform2f(p._u.uLightUV, lu, lv);
       gl.uniform2f(p._u.uSpanUV, ru, rv);
       gl.uniform1f(p._u.uHeightMax, heightRange);
@@ -61840,7 +62021,7 @@ function glRigFrame() {
       if (sx1 <= sx0 || sy1 <= sy0) continue;
       gl.scissor(sx0, sy0, sx1 - sx0, sy1 - sy0);
 
-      glRigBindTex(gl, p, 'uHgt', 1, GLRig.tex.height);
+      glRigBindHgt(gl, p);
       glRigBindTex(gl, p, 'uNrm', 3, GLRig.fbo.normal.tex);
       glRigBindTex(gl, p, 'uPolar', 5, GLRig.fbo.polar.tex);
       gl.uniform2f(p._u.uLightUV, lu, lv);
@@ -61973,6 +62154,15 @@ function drawClimateReadout() {
   text(worldClockLabel() + " " + phase, climateX, 42);
   fill(230); textSize(12);
   text(Math.round(worldTemperatureF()) + "°F" + (isRaining ? "  RAIN" : ""), climateX, 56);
+  // The time of year, named for the hemisphere the player is in, and how far
+  // up the globe they are (SEASONS AND LATITUDE).
+  // The alien worlds have neither (they keep the default sun).
+  _skyTerms();
+  if (SUN.solar) {
+    const deg = Math.round(Math.abs(SUN.lat * 180 / Math.PI));
+    fill(200, 214, 230); textSize(10);
+    text(seasonName() + "  " + deg + "°" + (SUN.lat >= 0 ? "N" : "S"), climateX, 70);
+  }
 
   // WHAT THE LIGHT RIG IS ACTUALLY DOING. Off by default; set window.SHOW_RIG
   // from the console to turn it on. It exists because "it feels slow" and "it
@@ -61989,7 +62179,7 @@ function drawClimateReadout() {
                '  ' + GLRig.ms.toFixed(1) + 'ms')
             : ('RIG OFF  ' + (GLRig.failure || 'no webgl2') +
                '  ' + GLRig.ms.toFixed(1) + 'ms'),
-         width - 70, 70);
+         width - 70, 84);
   }
   pop();
 }
@@ -62118,6 +62308,144 @@ const DAY_MS      = 48 * 60 * 1000;      // real milliseconds per in-game day
 const SUNRISE_H   = 6;                   // in-game hour the sun crosses up
 const DAY_SPAN_H  = 12;                  // hours of daylight (06:00 -> 18:00)
 
+// ###########################################################################
+//  SEASONS AND LATITUDE: WHERE THE SUN ACTUALLY IS
+//
+//  The map runs north to south down the globe. Stick City sits on the northern
+//  US border, the Undercity in the temperate middle, Dry Gulch on the Tropic of
+//  Cancer, the Green Line across the equator and the White Silence in
+//  Antarctica. So the sun's path depends on where the player is standing and
+//  on the time of year, exactly as a real one does: high and to the south at a
+//  northern noon, high and to the NORTH at an Antarctic one, nearly overhead at
+//  an equatorial noon, and skimming the horizon all day in a polar winter.
+//
+//  The geometry is the textbook one, computed once whenever its inputs change
+//  (see _skyTerms) into plain scalars on SUN, never per caster:
+//
+//    declination   d = SOLAR_TILT * sin(2 pi * seasonProgress)
+//    hour angle    H = (hour - 12) / 24 * 2 pi        (-pi at midnight, 0 at noon)
+//    elevation     sin(el) = sin(lat) sin(d) + cos(lat) cos(d) cos(H)
+//    sun, east     E = -cos(d) sin(H)
+//    sun, north    N =  cos(lat) sin(d) - sin(lat) cos(d) cos(H)
+//
+//  Shadows fall AWAY from the sun's compass bearing, and on screen east is +x
+//  and north is -y, so the shadow direction is (-E, N) normalised.
+//
+//  WHAT FOLLOWS THE REAL SUN, AND WHAT DOES NOT. The sun's geometry -- which
+//  way every shadow points, how far it throws, and the fade as the sun reaches
+//  the horizon -- follows this model in Sectors 1-5. The day/night CLOCK does
+//  not: daylight(), the night wash, the grade and every system keyed to the
+//  hour (the flashlight from 18:00, the lamps, the city's night behaviour)
+//  still run on the 06:00 -> 18:00 day above. At an equinox the two agree
+//  exactly at every latitude -- the sun rises at 06:00 and sets at 18:00
+//  everywhere on Earth that day. Away from it a winter morning can be light
+//  before the sun is up (no shadows yet), and a polar winter is a bright day
+//  with the sun at or below the horizon, which is what polar twilight is.
+//
+//  The two alien worlds (6, 7) and the closed interiors have no latitude: they
+//  keep the camera-chosen arc in _skyTerms unchanged (see THE SUN TRAVELS).
+// ###########################################################################
+const SEASON_YEAR_DAYS   = 28;            // in-game days per year: seven per season
+const SEASON_EQUINOX_DAY = 79;            // calendar day of the March equinox (0 = 1 January)
+const SEASON_NAMES = ['SPRING', 'SUMMER', 'AUTUMN', 'WINTER'];
+const SOLAR_TILT   = 23.44 * Math.PI / 180;
+// Latitude in degrees at the sector's north edge and at its south edge
+// (+north / -south). Absent: no solar model (Sectors 6, 7).
+const SOLAR_LATITUDE = { 1: [49, 47], 2: [40, 36], 3: [24, 20], 4: [0, -10], 5: [-65, -75] };
+// World y from -SOLAR_LAT_SPAN (the north edge) to +SOLAR_LAT_SPAN (the south
+// edge). Thirty kilometres each way: the latitude drifts by a fraction of a
+// degree across a whole sector, so walking never visibly turns the sun.
+const SOLAR_LAT_SPAN = CHUNK_W * 24;
+// Shadow throw per unit of height, 1/tan(elevation), held inside these. The
+// floor keeps an overhead sun from shrinking every shadow to nothing; the
+// ceiling is what a sunrise is clamped to, so a dawn shadow is long but never
+// longer than the culling margins below allow for (shadowCullReach).
+const SUN_SHADOW_MIN = 0.25;
+const SUN_SHADOW_MAX = 4.5;
+// Elevation (radians) over which shadows fade in at sunrise and out at sunset.
+const SUN_FADE_EL = 0.05;
+
+// 0 at the March equinox, 0.25 the June solstice, 0.5 the September equinox,
+// 0.75 the December solstice. Advanced by updateWorldClock(), seeded once per
+// run by seedWorldClock(), saved with the clock.
+let seasonProgress = 0.15;
+let seasonLocked = false;
+
+// The sun, as plain numbers, refreshed by _skyTerms(). Read it; never write it.
+// Angles in radians. `solar` is false where there is no latitude, and then only
+// dirX/dirY/length/fade are meaningful.
+const SUN = {
+  solar: false, lat: 0, decl: 0, hourAngle: 0, elev: 0, azimuth: 0,
+  dirX: LIGHT_DX, dirY: LIGHT_DY, length: 1, fade: 1, up: 1, season: 0
+};
+
+// The latitude where the player is standing, in degrees, or null.
+function solarLatitude(biome, y) {
+  const L = SOLAR_LATITUDE[biome];
+  if (!L) return null;
+  let t = 0.5 + 0.5 * ((Number.isFinite(y) ? y : 0) / SOLAR_LAT_SPAN);
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return L[0] + (L[1] - L[0]) * t;
+}
+// Asked at the top of every sky-term read, which is several hundred times a
+// frame (see THE SUN TERMS ARE MEMOISED), so it answers from its own inputs.
+let _solLatY = NaN, _solLatBiome = null, _solLatOn = null, _solLatV = null;
+function _solarLatHere() {
+  if (!BIOME_ACTIVE) return null;
+  const y = (typeof player !== 'undefined' && player && Number.isFinite(player.y)) ? player.y : 0;
+  if (y === _solLatY && currentBiome === _solLatBiome && _solLatOn === BIOME_ACTIVE) return _solLatV;
+  _solLatY = y; _solLatBiome = currentBiome; _solLatOn = BIOME_ACTIVE;
+  const lat = solarLatitude(currentBiome, y);
+  // Quantised so the sky terms are not recomputed for every step the player takes.
+  return (_solLatV = lat === null ? null : Math.round(lat * 100) / 100);
+}
+
+function _wrapSeason(p) { p = p % 1; return p < 0 ? p + 1 : p; }
+// The season by name, centred on its solstice or equinox -- midsummer is the
+// June solstice. Named for the hemisphere the player is in: the Green Line's
+// south and the White Silence have their summer in December.
+function seasonName(p, lat) {
+  const q = _wrapSeason((p === undefined ? seasonProgress : p) + 0.125);
+  let i = Math.floor(q * 4) % 4;
+  const l = lat === undefined ? (SUN.solar ? SUN.lat * 180 / Math.PI : 45) : lat;
+  if (l < 0) i = (i + 2) % 4;
+  return SEASON_NAMES[i];
+}
+// Calendar day, 0 = 1 January, as a real year (365 days) rather than a game one.
+function seasonDayOfYear() {
+  return (SEASON_EQUINOX_DAY + seasonProgress * 365) % 365;
+}
+
+// DEBUG AND TEST CONTROLS. From the console:
+//   setSeason('WINTER')      the northern season at its solstice/equinox
+//   setSeason(0.25)          a raw seasonProgress (0 = March equinox)
+//   setSeasonDay(172)        a calendar day, 0 = 1 January
+//   advanceSeason(3)         move on by three in-game days (negative goes back)
+//   lockSeason(true)         hold the season while the clock keeps running
+// The clock and its season ride the save, so a locked season survives a reload.
+function setSeason(v) {
+  if (typeof v === 'string') {
+    const i = SEASON_NAMES.indexOf(v.toUpperCase());
+    if (i < 0) return seasonProgress;
+    seasonProgress = i * 0.25;
+  } else if (Number.isFinite(v)) seasonProgress = _wrapSeason(v);
+  _skT = NaN;                               // the sun moves now, not next tick
+  return seasonProgress;
+}
+function setSeasonDay(day) {
+  if (!Number.isFinite(day)) return seasonProgress;
+  return setSeason((day - SEASON_EQUINOX_DAY) / 365);
+}
+function advanceSeason(days) {
+  return setSeason(seasonProgress + (Number(days) || 0) / SEASON_YEAR_DAYS);
+}
+function lockSeason(on) { seasonLocked = on === undefined ? true : !!on; return seasonLocked; }
+if (typeof window !== 'undefined') {
+  window.setSeason = setSeason; window.setSeasonDay = setSeasonDay;
+  window.advanceSeason = advanceSeason; window.lockSeason = lockSeason;
+  window.seasonName = seasonName; window.SUN = SUN;
+}
+
 let worldTimeMs   = DAY_MS * (8 / 24);   // replaced by seedWorldClock() on run start
 let clockLastMs   = null;
 
@@ -62146,6 +62474,8 @@ function seedWorldClock() {
   else if (r < 0.92) h = 4.8  + Math.random() * 2.2;    // 04:48 - 07:00, dawn
   else               h = (20.0 + Math.random() * 8.0) % 24;   // night watch
   worldTimeMs = DAY_MS * (h / 24);
+  // And a time of year, the same way: picked once, then left to run.
+  if (!seasonLocked) seasonProgress = Math.random();
   clockLastMs = null;                 // do not bill the seeding to the clock
   lastWeatherRollHour = -1;           // let the new hour roll its own sky
   updateSunVector();                  // the first frame is lit by the new hour
@@ -62183,11 +62513,19 @@ function worldHour() { return (worldTimeMs / DAY_MS) * 24; }
 // the value the old code computed, so this is invisible on screen by
 // construction, which is the only kind of rendering optimisation worth having.
 let _skT = NaN, _skBiome = null, _skRain = null;
+let _skLat = null, _skSeason = NaN, _skActive = null, _skRev = 0;
 let _skAlt = 0, _skDay = 0, _skHeight = 0, _skGolden = 0, _skCloud = 0, _skDiffuse = 0;
 let _skShLen = 0, _skShDen = 0;
 function _skyTerms() {
-  if (worldTimeMs === _skT && currentBiome === _skBiome && isRaining === _skRain) return;
+  // The latitude and the season are inputs too (see SEASONS AND LATITUDE). The
+  // latitude is quantised to a hundredth of a degree, so walking about does not
+  // invalidate this every frame -- the clock already does.
+  const lat = _solarLatHere();
+  if (worldTimeMs === _skT && currentBiome === _skBiome && isRaining === _skRain &&
+      lat === _skLat && seasonProgress === _skSeason && BIOME_ACTIVE === _skActive) return;
   _skT = worldTimeMs; _skBiome = currentBiome; _skRain = isRaining;
+  _skLat = lat; _skSeason = seasonProgress; _skActive = BIOME_ACTIVE;
+  _skRev++;
 
   const hour = (worldTimeMs / DAY_MS) * 24;
   const a = Math.sin(((hour - SUNRISE_H) / DAY_SPAN_H) * Math.PI);
@@ -62198,30 +62536,6 @@ function _skyTerms() {
   _skDay = k * k * (3 - 2 * k);          // smoothstep
 
   _skHeight = a < 0 ? 0 : a > 1 ? 1 : a;
-
-  // WHERE the sun is, and therefore where every shadow points. It belongs in
-  // this block rather than only in updateWorldClock() because this block
-  // already invalidates on exactly the thing that moves the sun -- so any path
-  // that steps the clock and then reads a sky term gets a matching sun for
-  // free, including a cutscene, a restored save and the headless tools.
-  // See THE SUN TRAVELS.
-  //
-  // Held while a bake is running. A bake can be the first thing in a frame to
-  // ask for a sky term -- shadowDensity() inside paintClutter() will do it --
-  // and this block invalidates on a clock that has just advanced, so without
-  // the guard it would recompute the live sun halfway through a buffer that is
-  // meant to be pinned to the reference one. The other terms are still allowed
-  // to refresh: only the direction has to hold.
-  if (!_bakingSun) {
-    // 0 at sunrise, 1 at sunset, held at the ends through the night: the sun is
-    // below the horizon there and shadowDensity() has already faded every
-    // shadow out, so all this has to do is not spin round unseen.
-    let ts = (hour - SUNRISE_H) / DAY_SPAN_H;
-    ts = ts < 0 ? 0 : ts > 1 ? 1 : ts;
-    const ang = SUN_EDGE + (Math.PI - 2 * SUN_EDGE) * (1 - ts);
-    LIGHT_DX = Math.cos(ang);
-    LIGHT_DY = Math.sin(ang);
-  }
 
   const g = 1 - Math.abs(a) / 0.34;
   _skGolden = g < 0 ? 0 : g > 1 ? 1 : g;
@@ -62238,11 +62552,80 @@ function _skyTerms() {
   const d = _skCloud;
   _skDiffuse = d * d * (3 - 2 * d);      // smoothstep -- thin cloud barely counts
 
-  // The two the shadow passes ask for per caster, folded in here rather than
-  // recomposed from the fields above every time one is drawn.
-  _skShLen = (1.55 - 0.62 * _skHeight) * (1 - 0.25 * _skDiffuse);
-  _skShDen = _skDay * (0.55 + 0.45 * _skHeight) * (1 - 0.55 * _skDiffuse);
+  // How dark a shadow is, before the sun's own height says whether it can
+  // throw one at all.
+  const den = _skDay * (0.55 + 0.45 * _skHeight) * (1 - 0.55 * _skDiffuse);
+
+  // WHERE the sun is, and therefore where every shadow points. It belongs in
+  // this block rather than only in updateWorldClock() because this block
+  // already invalidates on exactly the thing that moves the sun -- so any path
+  // that steps the clock and then reads a sky term gets a matching sun for
+  // free, including a cutscene, a restored save and the headless tools.
+  // See THE SUN TRAVELS.
+  //
+  // The direction is held while a bake is running. A bake can be the first
+  // thing in a frame to ask for a sky term -- shadowDensity() inside
+  // paintClutter() will do it -- and this block invalidates on a clock that has
+  // just advanced, so without the guard it would recompute the live sun halfway
+  // through a buffer that is meant to be pinned to the reference one. The other
+  // terms are still allowed to refresh: only the direction has to hold.
+  SUN.season = seasonProgress;
+  if (lat !== null) {
+    // SEASONS AND LATITUDE: the real sun for where the player is standing.
+    const phi = lat * Math.PI / 180;
+    const decl = SOLAR_TILT * Math.sin(seasonProgress * Math.PI * 2);
+    const H = ((hour - 12) / 24) * Math.PI * 2;
+    const sp = Math.sin(phi), cp = Math.cos(phi), sd = Math.sin(decl), cd = Math.cos(decl);
+    const cH = Math.cos(H), sH = Math.sin(H);
+    let se = sp * sd + cp * cd * cH;
+    se = se < -1 ? -1 : se > 1 ? 1 : se;
+    const el = Math.asin(se);
+    const E = -cd * sH, N = cp * sd - sp * cd * cH;
+    const hz = Math.sqrt(E * E + N * N);
+    // Straight overhead the bearing is undefined for an instant; the shadow is
+    // at its shortest there, and the last bearing holds until it is defined.
+    if (!_bakingSun && hz > 1e-7) { LIGHT_DX = -E / hz; LIGHT_DY = N / hz; }
+    // 1 / tan(el), clamped: the throw per unit of height.
+    let len = el > 0 ? Math.cos(el) / Math.max(se, 1e-6) : SUN_SHADOW_MAX;
+    len = len < SUN_SHADOW_MIN ? SUN_SHADOW_MIN : len > SUN_SHADOW_MAX ? SUN_SHADOW_MAX : len;
+    // In from the horizon over SUN_FADE_EL, so a shadow does not snap on at
+    // sunrise or off at sunset.
+    let f = el / SUN_FADE_EL;
+    f = f < 0 ? 0 : f > 1 ? 1 : f;
+    f = f * f * (3 - 2 * f);
+    _skShLen = len;
+    _skShDen = den * f;
+    SUN.solar = true; SUN.lat = phi; SUN.decl = decl; SUN.hourAngle = H; SUN.elev = el;
+    SUN.azimuth = Math.atan2(E, N);          // compass bearing, clockwise from north
+    SUN.length = len; SUN.fade = f; SUN.up = se > 0 ? se : 0;
+  } else {
+    // No latitude: the camera-chosen arc. 0 at sunrise, 1 at sunset, held at
+    // the ends through the night: the sun is below the horizon there and
+    // shadowDensity() has already faded every shadow out, so all this has to
+    // do is not spin round unseen.
+    if (!_bakingSun) {
+      let ts = (hour - SUNRISE_H) / DAY_SPAN_H;
+      ts = ts < 0 ? 0 : ts > 1 ? 1 : ts;
+      const ang = SUN_EDGE + (Math.PI - 2 * SUN_EDGE) * (1 - ts);
+      LIGHT_DX = Math.cos(ang);
+      LIGHT_DY = Math.sin(ang);
+    }
+    // Shadows are long and soft when the sun is low, short and firm at noon.
+    _skShLen = (1.55 - 0.62 * _skHeight) * (1 - 0.25 * _skDiffuse);
+    _skShDen = den;
+    SUN.solar = false; SUN.lat = 0; SUN.decl = 0; SUN.hourAngle = ((hour - 12) / 24) * Math.PI * 2;
+    SUN.elev = Math.asin(_skHeight); SUN.azimuth = 0;
+    SUN.length = _skShLen; SUN.fade = 1; SUN.up = _skHeight;
+  }
+  SUN.dirX = LIGHT_DX; SUN.dirY = LIGHT_DY;
 }
+
+// The terms a lit surface reads, beside the shadow ones: how high the sun is
+// (sin of its elevation, 0 at or below the horizon) and how much of the direct
+// light the horizon fade has left. Outside the solar model these are the
+// clock's own height and 1, which is exactly what those surfaces read before.
+function sunUp()   { _skyTerms(); return SUN.up; }
+function sunFade() { _skyTerms(); return SUN.fade; }
 
 // +1 at noon, 0 at sunrise and sunset, -1 at midnight.
 function sunAltitude() { _skyTerms(); return _skAlt; }
@@ -62285,13 +62668,21 @@ function sunColour() {
 // longer a point source.
 function keyStrength() { return 1 - 0.42 * skyDiffusion(); }
 
-// Shadows are long and soft when the sun is low, short and firm at noon, and
-// they fade out entirely under cloud -- an overcast day has no hard shadows at
-// all. This is only how LONG they are; which way they point is updateSunVector()
-// (see THE SUN TRAVELS), and the deferred rig derives its ray-march slope from
-// this function so a marched shadow is the length the 2D pass would have drawn.
+// How far a shadow throws per unit of its caster's height. Under the solar
+// model (Sectors 1-5) it is 1 / tan(elevation), held between SUN_SHADOW_MIN at
+// an overhead sun and SUN_SHADOW_MAX at the horizon -- so a winter noon at Stick
+// City throws three times a summer one, and a dawn stretches everything as far
+// as the culling margins are built for (shadowCullReach). Elsewhere it is the
+// old arc: long and soft when the sun is low, short and firm at noon, and a
+// quarter shorter under heavy cloud. Under the solar model cloud only fades a
+// shadow (shadowDensity()); it does not move the sun. This is
+// only how LONG they are; which way they point is updateSunVector() (see THE
+// SUN TRAVELS), and the deferred rig derives its ray-march slope from this
+// function so a marched shadow is the length the 2D pass would have drawn.
 function shadowLengthScale() { _skyTerms(); return _skShLen; }
-// Multiplied by daylight() because a shadow needs a sun to throw it. This used
+// Multiplied by daylight() because a shadow needs a sun to throw it -- and,
+// under the solar model, by the horizon fade (SUN_FADE_EL), because a clock
+// that says it is light does not put the sun above the horizon. This used
 // to bottom out at 0.55, so at midnight every prop in the world still had a
 // hard oval lying beside it, cast by a sun that had set hours earlier -- while
 // the deferred rig, whose sun term goes to zero on its own, had correctly
@@ -62348,6 +62739,8 @@ function updateWorldClock() {
 
   worldClockDtMs = dt;
   worldTimeMs = (worldTimeMs + dt) % DAY_MS;
+  // The year turns with the day: SEASON_YEAR_DAYS of them to a full cycle.
+  if (!seasonLocked) seasonProgress = _wrapSeason(seasonProgress + dt / (DAY_MS * SEASON_YEAR_DAYS));
   tickForestHuntingSupply(dt);
 
   // One weather roll per in-game hour — 24 chances a day, which is what makes
@@ -69786,7 +70179,8 @@ void main() {
     const slope=readLightTerm(()=>1/Math.max(.35,shadowLengthScale()*1.35),.8);
     const dx=typeof LIGHT_DX==='number'?LIGHT_DX:.6,dy=typeof LIGHT_DY==='number'?LIGHT_DY:.8;
     const sunLength=Math.hypot(dx,dy,slope)||1;
-    const sunWeight=.55*day*key*(1-.75*sky);
+    const fade=unitClamp(readLightTerm(()=>typeof sunFade==='function'?sunFade():1,1));
+    const sunWeight=.55*day*key*fade*(1-.75*sky);
     let x=-dx/sunLength*sunWeight,y=-dy/sunLength*sunWeight,z=slope/sunLength*sunWeight;
     let localWeight=0,n=0;
     const origin=snapshot&&snapshot.worldOrigin;

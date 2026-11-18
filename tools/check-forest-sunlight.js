@@ -11,8 +11,20 @@ function hour(h, rain = false) {
   return P('({...forestSunLighting()})');
 }
 probe('BIOME_ACTIVE=true;currentBiome=currentLevel=2;authoredCore=authoredMask=authoredChunks=null;activeBuildings=[];activeParkingCars=[];enemiesList=[];allies=[];player=null;camX=camY=0;zoom=1;GLRig.on=GLRig.ok=false;');
+// The equinox, so the sun rises at 06:00 and sets at 18:00 at the forest's
+// latitude like everywhere else (SEASONS AND LATITUDE in game.js); the noon
+// sun stands at 90 - 38 degrees there, so the light's height is cos(38).
+probe("setSeason('SPRING');");
 const dawn=hour(6), noon=hour(12), dusk=hour(18), midnight=hour(0);
-ok('the material light follows sunrise, high noon and sunset elevation', dawn.up===0 && noon.up===1 && dusk.up===0);
+ok('the material light follows sunrise, high noon and sunset elevation',
+   dawn.up===0 && Math.abs(noon.up-Math.round(Math.cos(38*Math.PI/180)*64)/64)<1e-9 && dusk.up===0);
+probe("setSeason('SUMMER');");
+const summerNoon=hour(12);
+probe("setSeason('WINTER');");
+const winterNoon=hour(12);
+probe("setSeason('SPRING');");
+ok('and stands higher in summer than in winter', summerNoon.up>noon.up && noon.up>winterNoon.up && winterNoon.up>0);
+hour(0);
 ok('night has no direct cel highlight', midnight.direct===0 && P('forestSunShade(-LIGHT_DX,-LIGHT_DY,0,.5,1,1.5)===1'));
 ok('dawn and dusk face opposite horizontal directions', dawn.dx<-.9 && dusk.dx>.9);
 const clear=hour(12), rain=hour(12,true);
@@ -58,8 +70,10 @@ for (const h of [6,12,18,0]) {
   ok('micro-art bake is independent of current hour at '+h+'h', calls.sig===bakedSignature);
 }
 hour(8);
-probe('worldTimeMs=DAY_MS*16/24;withBakedSun(()=>shadowDensity());forestSunLighting();');
-ok('a bake that first reads the changed clock cannot retain the earlier live sun', P('LIGHT_DX>.7&&LIGHT_DY>.5'));
+probe('worldTimeMs=DAY_MS*16/24;withBakedSun(()=>shadowDensity());forestSunLighting();__afterBake=[LIGHT_DX,LIGHT_DY];_skT=NaN;updateSunVector();');
+// The 16:00 sun, freshly computed, is the one that must be live afterwards.
+ok('a bake that first reads the changed clock cannot retain the earlier live sun',
+   P('LIGHT_DX>.7&&__afterBake[0]===LIGHT_DX&&__afterBake[1]===LIGHT_DY'));
 probe('__restoredSun=[LIGHT_DX,LIGHT_DY];try{withBakedSun(()=>{throw new Error("bake guard probe");});}catch(e){}');
 ok('a failed bake restores the live vector and guard', P('!_bakingSun&&LIGHT_DX===__restoredSun[0]&&LIGHT_DY===__restoredSun[1]'));
 

@@ -191,8 +191,11 @@ const diag = lean(600, 400, 26);
 const dotSun = diag[0] * probe('LIGHT_DX') + diag[1] * probe('LIGHT_DY');
 const away = lean(-600, -400, 26);
 const dotSun2 = away[0] * probe('LIGHT_DX') + away[1] * probe('LIGHT_DY');
+// Opposite signs, whichever way the sun is: it can stand to the north or the
+// south of the scene now (SEASONS AND LATITUDE), so which side agrees with it
+// is not fixed -- only that the two sides disagree.
 ok('the lean is not the light vector -- it reverses across the view while the sun does not',
-   dotSun > 0 && dotSun2 < 0, 'dot ' + dotSun.toFixed(1) + ' one side, ' + dotSun2.toFixed(1) + ' the other');
+   dotSun * dotSun2 < 0, 'dot ' + dotSun.toFixed(1) + ' one side, ' + dotSun2.toFixed(1) + ' the other');
 
 ok('it scales with the mass', lean(600, 0, 26)[0] > lean(600, 0, 8)[0] * 2,
    lean(600, 0, 26)[0].toFixed(1) + ' vs ' + lean(600, 0, 8)[0].toFixed(1));

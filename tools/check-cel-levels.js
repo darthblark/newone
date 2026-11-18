@@ -35,7 +35,10 @@ probe(`
   __lv = function (l, b) { currentLevel = l; currentBiome = b === undefined ? l : b; };
   BIOME_ACTIVE = true; frameCount = 500;
   viewLeft = -2000; viewRight = 2000; viewTop = -2000; viewBottom = 2000;
-  seedWorldClock(); __day(15);
+  // seedWorldClock() picks a random time of year as well as an hour, and the
+  // sun now follows it (SEASONS AND LATITUDE): pinned to midsummer, so the
+  // 15:00 and 17:00 suns below are always up and never at their longest.
+  seedWorldClock(); setSeason('SUMMER'); __day(15);
 `);
 
 console.log('\n== which levels are cel levels ==');

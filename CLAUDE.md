@@ -1153,14 +1153,12 @@ for free — a cutscene, a restored save, the headless tools. `updateSunVector()
 named way in (it just calls `_skyTerms()`, which no-ops when the clock has not moved), and
 `updateWorldClock()` calls it at the **top**, before that function's paused early-out.
 
-**The one thing here that is deliberately not literal is which side of the sky the sun
-sits on.** Physically a mid-northern summer sun spends the middle of the day to the
-south, which from directly above throws every shadow *up* the screen — into the very
-face the lean turns toward the camera, so the shadow hides behind the wall that cast it,
-exactly when shadows are the only thing telling you a flat-looking scene has height in
-it. The arc is kept on the up-screen half. The east–west travel, the altitude arc and
-the sweep are all as they should be; only the hemisphere is chosen for the camera. Same
-call the weapon parallax makes.
+**In Sectors 1–5 the sun is the real one** — see **Seasons and latitude** below. The
+camera-chosen arc described here survives only where there is no latitude: the two alien
+worlds (6, 7) and the closed interiors. That arc keeps the sun on the up-screen half, so
+every shadow falls down the screen and out from under the lean; a northern noon now
+throws shadows *up* the screen instead, partly under the roofs the lean pushes north in
+the top half of the view. That trade was taken on purpose, for the hemisphere flip.
 
 **Anything baked takes `SUN_REF_DX`/`SUN_REF_DY` instead, and that is not a nicety.** A
 chunk bakes when the player first walks into it, so a bake reading the live vector would
@@ -1189,6 +1187,59 @@ projection is the camera, the shadow is the sun, and the scene only reads as sol
 those two disagree). Both use `calls.sig`, a rolling hash of every coordinate the harness
 was asked to draw at: a call *count* cannot see a shadow pointing the wrong way, because
 it is the same number of ellipses landing somewhere else.
+
+### Seasons and latitude
+
+The map runs down the globe, so the sun follows where the player is and the time of year.
+`SOLAR_LATITUDE` gives each sector a north and south edge (1: 49→47°N, 2: 40→36°N,
+3: 24→20°N, 4: 0→10°S, 5: 65→75°S), blended by the player's world y over
+`SOLAR_LAT_SPAN`; 6 and 7 have none. `seasonProgress` (0 = March equinox, 0.25 June
+solstice) turns with the clock over `SEASON_YEAR_DAYS` (28) in-game days, is seeded once per
+run by `seedWorldClock()`, and rides the save with `seasonLocked`. Console/test controls:
+`setSeason('WINTER' | 0..1)`, `setSeasonDay(day)`, `advanceSeason(days)`, `lockSeason(on)`;
+`seasonName()` is hemisphere-aware and the climate readout shows it with the latitude.
+
+`_skyTerms()` computes the declination, hour angle, elevation and bearing once when its
+inputs change (clock, biome, rain, quantised latitude, season, `BIOME_ACTIVE`) into the
+scalars on `SUN` — no allocation, nothing per caster. From them:
+
+- `LIGHT_DX/DY` is the shadow direction, opposite the sun's compass bearing: north (up the
+  screen) at a northern noon, south in Antarctica, and swinging across the line in the
+  tropics with the season.
+- `shadowLengthScale()` is `1/tan(elevation)`, clamped to `SUN_SHADOW_MIN` 0.25 and
+  `SUN_SHADOW_MAX` 4.5. Cloud fades a shadow, it no longer shortens it.
+- `shadowDensity()` takes the horizon fade `SUN.fade` (0 → 1 over `SUN_FADE_EL` 0.05 rad),
+  so no shadow is cast with the sun below the horizon whatever the clock says.
+- `sunUp()`/`sunFade()` are what lit surfaces read: the forest's material light, the rig's
+  sun power and the Player3D lighting sample all take them.
+
+**Only the sun's geometry is real; the day/night clock is not.** `daylight()`, the night
+wash, the grade, `sunHeight()`/`sunColour()` and every system keyed to the hour stay on the
+06:00→18:00 day. At an equinox the two agree at every latitude. Off it, a winter morning
+can be light before the sun is up (no shadows yet), and a polar winter is a bright day with
+the sun at or below the horizon.
+
+**A shadow can now point anywhere, and every box-shaped one goes through
+`rectShadowHull()`.** The old sun never threw north, so the hulls in `castShadowRect` and
+both building branches of `drawBiomeShadows()` were written for down-right (and the cel
+branch for down-left too); an up-left shadow crossed itself. A figure's wall fold also
+handles the south faces a north-falling shadow meets, painted at once under the figure in
+front of them.
+
+**Culling grows toward the sun.** `inShadowView(x, y, pad, reach)` grows the view by a
+caster's own throw on the side the sun is on, and nowhere else. It is used by
+`drawBiomeShadows()`, the biome-prop culls in `drawDepthSorted()`/`drawBiomeProps()`
+(`propShadowReach()`), the actor cull (`actorShadowReach()`), and `drawDecor()`, which
+hands trees off screen toward the sun to the cel pre-pass for their crown shadow alone
+(`_standShadow`) rather than painting them. `_celShadeGather()` samples along the ray
+toward the sun for long throws. The rig's height buffer is larger than the screen by
+`GLRIG_HGT_MARGIN` (half the short side), slid toward the sun each frame
+(`glRigHgtWindow()`, `uHgtXf` in every shader that reads it); where the rig casts the sun
+the view globals are grown to match for the length of `glRigPaintHeight()`. The march runs `GLRIG_SUN_STEPS` 28 and stops
+once the ray clears `uHeightMax`.
+
+`node tools/check-solar.js` covers all of the above. See
+[Solar shadows](docs/solar-shadows.md).
 
 **A cast shadow is the convex hull of the silhouette and its offset copy, not the
 offset copy on its own.** `castShadow` / `castShadowRect` — called from twenty-eight
@@ -1221,7 +1272,8 @@ while the country outside it read as a city.
 `seedWorldClock`, `updateWorldClock`, `worldHour`, `sunAltitude`, `daylight`,
 `goldenHour`, `sunHeight`, `sunColour`, `keyStrength`, `warmth`,
 `worldTemperatureF`, `worldClockLabel` (~17615–17730). `drawClimateReadout()` surfaces
-it in the HUD.
+it in the HUD, with the season and latitude under it. The sun's position is separate:
+see **Seasons and latitude**.
 
 ### Light rig
 
@@ -3710,6 +3762,7 @@ node tools/check-lighting.js       # the deferred rig: uniforms resolve, nothing
 node tools/check-frame.js          # the real draw() in real Chromium: controls survive, push/pop balances, held buttons repeat
 node tools/check-fortress.js       # the overworld fortress: breach, muster, garrison, capture, save
 node tools/check-cel-levels.js     # the cel levels: gate, Undercity roofs/storeys, shadow hue, tree crowns, figure shade
+node tools/check-solar.js          # seasons, latitude, sun position, shadow hulls, sun-side culling, rig margin
 GAME_JS=/path/to/other.js node tools/check-generation.js    # compare against a baseline
 ```
 

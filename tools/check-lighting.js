@@ -569,12 +569,16 @@ const daySD = probe('shadowDensity()');
 const q = probe('skyDiffusion()');
 ok('and real weight at 13:00', daySD > 0.4,
    'density ' + daySD.toFixed(3) + ' at skyDiffusion ' + q.toFixed(2));
-// Sunset is 18:00 and daylight() is fully out a little after it, so the ramp
-// has to be sampled inside the window rather than past it.
-probe('worldTimeMs = 18 / 24 * DAY_MS;');
-const duskSD = probe('shadowDensity()');
-ok('easing off through dusk rather than snapping', duskSD > 0.01 && duskSD < daySD * 0.6,
-   'density ' + duskSD.toFixed(3) + ' at 18:00');
+// At an equinox the sun sets at 18:00 at every latitude (SEASONS AND
+// LATITUDE), and the shadows fade over its last few degrees, so the ramp is
+// sampled through the half hour before it rather than at it.
+probe("setSeason('SPRING');");
+const duskAt = (h) => { probe('worldTimeMs = ' + h + ' / 24 * DAY_MS;'); return probe('shadowDensity()'); };
+const dusk = [17.5, 17.75, 17.9, 18].map(duskAt);
+const duskSD = dusk[1];
+ok('easing off through dusk rather than snapping', duskSD > 0.01 && duskSD < daySD * 0.6 &&
+   dusk[0] > dusk[1] && dusk[1] > dusk[2] && dusk[2] > dusk[3] && dusk[3] < 0.01,
+   'density ' + dusk.map(v => v.toFixed(3)).join(' > ') + ' from 17:30 to 18:00');
 // shadowLengthScale() must NOT take the same term: it is how long a shadow is,
 // not how dark, and the rig derives its ray-march slope from it.
 ok('shadow LENGTH is left alone -- the rig marches against it',

@@ -313,13 +313,18 @@ ok('every chunk bakes without throwing', threw === null, threw || '');
     probe(`window.__sc = generateChunkContent(2, 3, -2); worldTimeMs = ${h} / 24 * DAY_MS;`);
     calls.sig = 0;
     probe('bakeChunkTerrain(2, 3, -2, window.__sc.decorBake)');
-    return [calls.sig, P('(updateSunVector(), LIGHT_DX.toFixed(3))')];
+    return [calls.sig, P('(updateSunVector(), LIGHT_DX.toFixed(3))'), P('LIGHT_DX'), P('LIGHT_DY')];
   };
   const runs = [7, 11, 15, 18].map(bakeAt);
   ok('the live sun really does travel across the day',
      new Set(runs.map(r => r[1])).size === 4, runs.map(r => r[1]).join('  '));
+  // One way round: every step turns the shadow the same way. Its east-west
+  // component alone need not grow all day -- a summer sun sets in the north-west
+  // (SEASONS AND LATITUDE), so a sunset shadow points less squarely east than a
+  // mid-afternoon one.
+  const turns = runs.slice(1).map((r, i) => runs[i][2] * r[3] - runs[i][3] * r[2]);
   ok('and it sweeps one way, dawn to dusk',
-     runs.every((r, i) => i === 0 || +r[1] > +runs[i - 1][1]));
+     turns.every(t => Math.sign(t) === Math.sign(turns[0]) && Math.abs(t) > 1e-6), turns.map(t => t.toFixed(3)).join('  '));
   ok('but a chunk bakes identically at every hour of it',
      new Set(runs.map(r => r[0])).size === 1, 'sig ' + runs[0][0]);
   // And the live vector is put back, or the rest of the frame is lit from the

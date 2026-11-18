@@ -56,6 +56,24 @@ ok('the rain is still falling', P('isRaining') === true);
 ok('and the particle system matches it', P('weather ? weather.kind : null') === kindBefore, P('weather ? weather.kind : null'));
 ok('the roll schedule is restored, not reset', P('lastWeatherRollHour') === 9, P('lastWeatherRollHour'));
 
+console.log('\n== the time of year ==');
+// The season is the clock's other half: where the sun is depends on both, so a
+// reload that kept the hour and lost the season would move every shadow.
+probe('seasonProgress = 0.6875; seasonLocked = true;');
+probe('saveGame();');
+probe('seasonProgress = 0.1; seasonLocked = false;');
+probe('loadGame();');
+ok('the season is restored', Math.abs(P('seasonProgress') - 0.6875) < 1e-9, P('seasonProgress'));
+ok('and so is a debug lock on it', P('seasonLocked') === true);
+probe('seasonLocked = false;');
+// A save written before seasons existed keeps whatever season the run has.
+{
+  const st = saved(); delete st.seasonProgress; delete st.seasonLocked; slot = JSON.stringify(st);
+  probe('seasonProgress = 0.3;');
+  probe('loadGame();');
+  ok('an older save leaves the season alone', Math.abs(P('seasonProgress') - 0.3) < 1e-9, P('seasonProgress'));
+}
+
 console.log('\n== ambush state ==');
 probe(`isStoryMode = true; townsData = {}; startAtLevel(3);
        farmAmbushActive = true; window.farmAmbushKills = 317; window.farmAmbushCleared = false;
