@@ -104,6 +104,12 @@ the night wash (and so the lamps, the lit windows and the ambient level),
 `goldenHour()`, the key light's colour (`sunHeight()`), the player's flashlight
 (on while the sun is below the horizon) and the air temperature.
 
+Stick City at 07:30: twilight in December, with the lamps still on and the
+sun twenty-five minutes from rising; full morning in June, three and a half hours after
+sunrise:
+
+![day length](previews/solar-day-length.png)
+
 | | sunrise | sunset |
 |---|---|---|
 | Stick City, June | 04:05 | 19:55 |
