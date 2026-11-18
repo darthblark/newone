@@ -1213,11 +1213,20 @@ scalars on `SUN` — no allocation, nothing per caster. From them:
 - `sunUp()`/`sunFade()` are what lit surfaces read: the forest's material light, the rig's
   sun power and the Player3D lighting sample all take them.
 
-**Only the sun's geometry is real; the day/night clock is not.** `daylight()`, the night
-wash, the grade, `sunHeight()`/`sunColour()` and every system keyed to the hour stay on the
-06:00→18:00 day. At an equinox the two agree at every latitude. Off it, a winter morning
-can be light before the sun is up (no shadows yet), and a polar winter is a bright day with
-the sun at or below the horizon.
+**Day length follows the sun too.** `sunAltitude()`, `daylight()` (the night wash and
+everything that reads it: lamps, lit windows, ambient), `goldenHour()` and `sunHeight()`
+(key-light colour) come from the real elevation, so a Stick City December day runs
+07:55→16:05, June 04:05→19:55, the Green Line stays near twelve hours, and the White Silence
+has a polar night in June and a midnight sun in December. `SUN_HIGH_SIN` (sin 55°) is what
+counts as a full noon for brightness and colour, because the palettes were authored against
+a noon of 1 — measured against the zenith a temperate equinox noon would be gold. `SUN.up` is
+the true sin(elevation) for the shading frames. The player's flashlight is on while the sun
+is below the horizon; `seedWorldClock()` picks the hour against the starting sector's
+sunrise and sunset for the seeded season (`solarDayHours()`); `worldTemperatureF()` swings
+the authored (equinox) bands by `SEASON_TEMP_PER_DEG` per degree of latitude, a month behind
+the sun. At an equinox all of it is the old 06:00→18:00 day at every latitude. The hour
+stays solar time, and the few things keyed to a fixed hour (the weather roll, the city's
+21:00 night checks) keep it.
 
 **A shadow can now point anywhere, and every box-shaped one goes through
 `rectShadowHull()`.** The old sun never threw north, so the hulls in `castShadowRect` and
@@ -1272,8 +1281,8 @@ while the country outside it read as a city.
 `seedWorldClock`, `updateWorldClock`, `worldHour`, `sunAltitude`, `daylight`,
 `goldenHour`, `sunHeight`, `sunColour`, `keyStrength`, `warmth`,
 `worldTemperatureF`, `worldClockLabel` (~17615–17730). `drawClimateReadout()` surfaces
-it in the HUD, with the season and latitude under it. The sun's position is separate:
-see **Seasons and latitude**.
+it in the HUD, with the season and latitude under it. In Sectors 1–5 the light follows the
+real sun rather than a fixed 06:00→18:00: see **Seasons and latitude**.
 
 ### Light rig
 
@@ -1346,8 +1355,9 @@ lamp posts were.
 **The flashlight is body mounted and weapon independent.**
 `gatherPlayerFlashlight()` shares Level 9's origin everywhere: 18 units along
 `player.aimAngle` from the player root, with height 24 and carrier clearance 40.
-It is active outdoors from 18:00 until 06:00; the permanently dark Level 9
-chamber retains it regardless of surface time. Guns, tools, recoil and weapon
+It is active outdoors while the sun is below the horizon (Sectors 1–5 follow the
+season and latitude; 18:00–06:00 at an equinox and on the alien worlds); the
+permanently dark Level 9 chamber retains it regardless of surface time. Guns, tools, recoil and weapon
 stance mounts do not move the source. It sorts first in the shared emitter
 budget and draws no separate fixture. `WEAPON_MUZZLE` and `weaponLightMuzzle()`
 still place gunfire flashes at their actual weapon origins.

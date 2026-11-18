@@ -164,6 +164,47 @@ ok('no shadow with the sun below the horizon, whatever the clock says',
 ok('the fade is complete from 0.05 rad up', at(1, 'SPRING', 9).fade === 1 &&
    (() => { const r = at(1, 'SPRING', 17.86); return r.el > 0 && r.el < 0.05 && r.fade > 0 && r.fade < 1; })());
 
+console.log('\n== day length ==');
+{
+  const dh = (b, season) => P(`Array.from(solarDayHours(solarLatitude(${b}, 0), setSeason(${JSON.stringify(season)})))`);
+  const near = (a, b, e) => Math.abs(a - b) < e;
+  const jun = dh(1, 'SUMMER'), dec = dh(1, 'WINTER');
+  ok('Stick City: sunrise about 04:05 and sunset 19:55 in June, 07:55 and 16:05 in December',
+     near(jun[0], 4.08, 0.05) && near(jun[1], 19.92, 0.05) && near(dec[0], 7.92, 0.05) && near(dec[1], 16.08, 0.05),
+     jun.map(v => v.toFixed(2)).join('-') + ', ' + dec.map(v => v.toFixed(2)).join('-'));
+  ok('at an equinox every sector has the 06:00 -> 18:00 day', [1, 2, 3, 4, 5].every(b => { const d = dh(b, 'SPRING'); return near(d[0], 6, 1e-6) && near(d[1], 18, 1e-6); }));
+  ok('the Green Line keeps close to twelve hours all year', ['SUMMER', 'WINTER'].every(se => { const d = dh(4, se); return near(d[1] - d[0], 12, 0.6); }));
+  ok('the White Silence: a polar night in June, a midnight sun in December',
+     JSON.stringify(dh(5, 'SUMMER')) === '[12,12]' && JSON.stringify(dh(5, 'WINTER')) === '[0,24]');
+  const day = (b, se, h) => { at(b, se, h); return P('daylight()'); };
+  ok('daylight() follows the sun: dark at 07:00 in a Stick City December, light at 05:00 in June',
+     day(1, 'WINTER', 7) < 0.05 && day(1, 'WINTER', 12) === 1 && day(1, 'SUMMER', 5) > 0.5 && day(1, 'SUMMER', 21) === 0);
+  ok('and the polar night stays dark at noon, the midnight sun light at midnight',
+     day(5, 'SUMMER', 12) < 0.05 && day(5, 'WINTER', 0) > 0.3, 'the December midnight sun stands 3.4 degrees up');
+  const edge = P('(() => { const t = 0.10 / 0.36; return t * t * (3 - 2 * t); })()');
+  ok('at an equinox sunrise and sunset are as light as the old 06:00 and 18:00',
+     [1, 2, 3, 4, 5].every(b => near(day(b, 'SPRING', 6), edge, 1e-6) && near(day(b, 'SPRING', 18), edge, 1e-6)));
+  at(1, 'SPRING', 12);
+  const h1 = P('sunHeight()');
+  ok('a temperate equinox noon is nearly full noon light, a 55-degree sun is full',
+     h1 > 0.8 && h1 < 0.85 && (at(2, 'SUMMER', 12), P('sunHeight()')) === 1, h1.toFixed(2) + ' at Stick City');
+  ok('a Stick City winter noon is a low winter sun', (at(1, 'WINTER', 12), P('sunHeight()')) < 0.45 &&
+     P('goldenHour()') === 0, P('sunHeight()').toFixed(2));
+  ok('SUN.up stays the true sin(elevation), which the shading frames need',
+     (at(1, 'SPRING', 12), Math.abs(P('SUN.up') - Math.cos(48 * DEG)) < 1e-9));
+  const temp = (b, se) => { at(b, se, 14); return P('worldTemperatureF()'); };
+  ok('the air is warmer in summer than in winter, more so further from the equator',
+     temp(1, 0.33) - temp(1, 0.83) > 30 && Math.abs(temp(4, 0.33) - temp(4, 0.83)) < 5,
+     'Stick City ' + Math.round(temp(1, 0.33)) + ' / ' + Math.round(temp(1, 0.83)) + ' F');
+  ok('and the other way round in Antarctica', temp(5, 0.83) > temp(5, 0.33) + 30);
+  // A run opens in the light of ITS day: seeded against December's sunrise and sunset.
+  probe("currentBiome = 1; lockSeason(false); setSeason('WINTER'); lockSeason(true);");
+  let light = 0;
+  for (let i = 0; i < 300; i++) { probe('seedWorldClock(); updateSunVector();'); if (P('daylight()') > 0.9) light++; }
+  probe('lockSeason(false);');
+  ok('a December run still opens in daylight most of the time', light > 300 * 0.55, light + ' of 300');
+}
+
 console.log('\n== the alien worlds keep the default sun ==');
 {
   let worst = 0;
@@ -172,11 +213,13 @@ console.log('\n== the alien worlds keep the default sun ==');
     const ts = Math.max(0, Math.min(1, (h - 6) / 12)), ang = 0.21 + (Math.PI - 0.42) * (1 - ts);
     const height = Math.max(0, Math.min(1, Math.sin((h - 6) / 12 * Math.PI)));
     const diff = P('skyDiffusion()');
+    const t = Math.max(0, Math.min(1, (Math.sin((h - 6) / 12 * Math.PI) + 0.10) / 0.36));
     worst = Math.max(worst, Math.abs(r.dx - Math.cos(ang)), Math.abs(r.dy - Math.sin(ang)),
-                     Math.abs(r.len - (1.55 - 0.62 * height) * (1 - 0.25 * diff)));
+                     Math.abs(r.len - (1.55 - 0.62 * height) * (1 - 0.25 * diff)),
+                     Math.abs(P('daylight()') - t * t * (3 - 2 * t)), Math.abs(P('sunHeight()') - height));
     if (r.solar) worst = 1;
   }
-  ok('Sectors 6 and 7: the camera-chosen arc, unchanged, in any season', worst < 1e-9, worst.toExponential(2));
+  ok('Sectors 6 and 7: the camera-chosen arc and the 06:00 -> 18:00 day, unchanged, in any season', worst < 1e-9, worst.toExponential(2));
 }
 probe('BIOME_ACTIVE = false;');
 ok('and so do the closed interiors', at(1, 'WINTER', 12).solar === false);

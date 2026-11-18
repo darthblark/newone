@@ -97,19 +97,49 @@ What that gives, at noon:
 Mornings throw west and evenings east everywhere; at an equinox the sun rises
 at 06:00 and sets at 18:00 at every latitude.
 
-### What follows the real sun and what does not
+### Day length
 
-Follows it: the shadow direction, shadow length, the horizon fade, the forest's
-material light (`sunUp()`, `sunFade()`), the GPU rig's sun direction and
-power, and the Player3D lighting sample.
+Everything the sun drives follows it, not only the shadows: `daylight()` and
+the night wash (and so the lamps, the lit windows and the ambient level),
+`goldenHour()`, the key light's colour (`sunHeight()`), the player's flashlight
+(on while the sun is below the horizon) and the air temperature.
 
-Does not: the day/night clock. `daylight()`, the night wash, the grade,
-`sunHeight()` / `sunColour()` and everything keyed to the hour (the flashlight
-from 18:00, lamps, the city's night behaviour) keep the 06:00 to 18:00 day.
-The two agree at the equinoxes. Away from them a winter morning can be light
-before the sun has risen (no shadows yet), and the White Silence's polar winter
-is a bright day with the sun at or below the horizon. Making the length of the
-day follow the sun too is a separate change.
+| | sunrise | sunset |
+|---|---|---|
+| Stick City, June | 04:05 | 19:55 |
+| Stick City, December | 07:55 | 16:05 |
+| any sector, equinox | 06:00 | 18:00 |
+| Green Line | within about 20 minutes of 06:00 / 18:00 all year | |
+| White Silence, June | polar night | |
+| White Silence, December | midnight sun (3.4° up at midnight) | |
+
+The hour on the clock is solar time, noon at 12:00, so the White Silence's
+December midnight is dim and gold rather than dark, and its June noon is a
+deep twilight with the flashlight on.
+
+Calls made here:
+
+- **What counts as a full noon.** Brightness and colour read the elevation
+  against `SUN_HIGH_SIN` (55°), not the zenith. Every palette was authored
+  against a noon of 1; measured against the zenith, a temperate equinox noon
+  (42° at Stick City) would come out late-afternoon gold. A December noon at
+  Stick City (19°) is still a low, warm winter sun. `SUN.up` stays the true
+  sin(elevation) for anything that needs a direction.
+- **The flashlight follows the sun**, which is the old 18:00 to 06:00 at an
+  equinox and keeps the clock on the alien worlds.
+- **The polar night stays dark.** Around the June solstice the White Silence
+  gets a few in-game days without a sunrise (roughly four real hours); the
+  flashlight covers it.
+- **A run opens in its own daylight.** `seedWorldClock()` picks the season,
+  then the hour against that day's sunrise and sunset where the run starts
+  (`solarDayHours()`), with the old weights. At an equinox the spans are
+  exactly the old 07:00 / 16:30 / 04:48.
+- **The air follows the season.** A sector's authored temperature bands are
+  its equinox climate; the year swings them by 0.4°F per degree of latitude
+  (capped at 25°F, opposite in the south, a month behind the sun). The Green
+  Line barely changes; Stick City runs about 19°F either way.
+- **Fixed hours stay fixed.** The weather roll and the city's 21:00 night
+  checks are keyed to the hour, not the light, and keep it.
 
 Where the GPU rig casts the sun (Sectors 3-7), how dark a shadow is on open
 ground follows how much direct light the ground gets, which is the sine of the
@@ -169,7 +199,8 @@ the tallest height). Frame timings are in the section below.
 ## Checks
 
 ```sh
-node tools/check-solar.js            # new: season, latitude, sun, hull, culling, rig margin, south walls
+node tools/check-solar.js            # new: season, latitude, sun, day length, hull, culling, rig margin, south walls
+node tools/check-player-flashlight.js # on while the sun is down: equinox edges, December, June, polar night
 node tools/check-saveload.js         # season and lock round-trip; older saves keep the season
 node tools/check-lighting.js         # dusk fade sampled at the equinox
 node tools/check-forest-sunlight.js  # material light follows the real elevation

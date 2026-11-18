@@ -22,12 +22,36 @@ function fresh() {
 }
 
 fresh();
-for (const [h, expected] of [[0,true],[5.999,true],[6,false],[12,false],[17.999,false],
-    [18,true],[23.999,true],[24,true],[30,false],[42,true],[-1,true],[-18,false]]) {
+// The flashlight is on while the sun is below the horizon (DAY LENGTH in
+// game.js). At an equinox that is 18:00 -> 06:00 at every latitude; the exact
+// instants of sunrise and sunset are a floating-point coin toss, so the edges
+// are sampled a minute either side.
+probe("lockSeason(false); setSeason('SPRING');");
+for (const [h, expected] of [[0,true],[5.98,true],[6.02,false],[12,false],[17.98,false],
+    [18.02,true],[23.98,true],[24.5,true],[30.02,false],[42.02,true],[-1,true],[-17.98,false]]) {
   hour(h);
-  ok('surface flashlight follows the strict 18:00–06:00 night at ' + h + 'h',
+  ok('surface flashlight follows the equinox 18:00–06:00 night at ' + h + 'h',
     P('playerFlashlightEnabled()') === expected && !!light() === expected);
 }
+// Away from the equinox it follows the sun, not the clock.
+probe("currentBiome = 1; setSeason('WINTER');");
+for (const [h, expected] of [[7.5,true],[12,false],[16.5,true]]) {
+  hour(h);
+  ok('a Stick City December keeps it on until the sun is up, and from sunset at ' + h + 'h',
+    P('playerFlashlightEnabled()') === expected && !!light() === expected);
+}
+probe("setSeason('SUMMER');");
+for (const [h, expected] of [[5,false],[19,false],[21,true]]) {
+  hour(h);
+  ok('a Stick City June leaves it off through the long evening at ' + h + 'h', P('playerFlashlightEnabled()') === expected);
+}
+probe("currentBiome = 5;"); hour(12);
+ok('the White Silence\'s polar night needs it at noon', P('playerFlashlightEnabled()') === true);
+probe("currentBiome = 6;"); hour(18.02);
+ok('the alien worlds keep the clock', P('playerFlashlightEnabled()') === true);
+hour(17.98);
+ok('in any season', P('playerFlashlightEnabled()') === false);
+probe("currentBiome = 2; setSeason('SPRING');");
 hour(0);
 const mounted = light();
 ok('the carried beam uses the Level 9 body mount and bearer clearance',

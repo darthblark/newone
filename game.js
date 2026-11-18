@@ -59835,8 +59835,16 @@ function sceneLightAmbient() { return currentLevel === 9 ? UNDERGROUND_AMBIENT :
 function playerFlashlightEnabled() {
   if (!player || !(player.hp > 0) || player.dead) return false;
   if (currentLevel === 9) return true; // The closed chamber is always dark.
+  if (!BIOME_ACTIVE) return false;
+  // On while the sun is below the horizon. Under the solar model that moves
+  // with the season and the latitude (DAY LENGTH) -- a December evening at
+  // Stick City is dark from four, a polar night all day -- and at an equinox
+  // it is exactly the 18:00 -> 06:00 it always was. The alien worlds keep the
+  // clock.
+  _skyTerms();
+  if (SUN.solar) return SUN.elev < 0;
   const hour = ((worldHour() % 24) + 24) % 24;
-  return BIOME_ACTIVE && (hour < SUNRISE_H || hour >= SUNRISE_H + DAY_SPAN_H);
+  return hour < SUNRISE_H || hour >= SUNRISE_H + DAY_SPAN_H;
 }
 function gatherPlayerFlashlight(out, enabled = playerFlashlightEnabled()) {
   if (!enabled) return;
@@ -62331,16 +62339,25 @@ const DAY_SPAN_H  = 12;                  // hours of daylight (06:00 -> 18:00)
 //  Shadows fall AWAY from the sun's compass bearing, and on screen east is +x
 //  and north is -y, so the shadow direction is (-E, N) normalised.
 //
-//  WHAT FOLLOWS THE REAL SUN, AND WHAT DOES NOT. The sun's geometry -- which
-//  way every shadow points, how far it throws, and the fade as the sun reaches
-//  the horizon -- follows this model in Sectors 1-5. The day/night CLOCK does
-//  not: daylight(), the night wash, the grade and every system keyed to the
-//  hour (the flashlight from 18:00, the lamps, the city's night behaviour)
-//  still run on the 06:00 -> 18:00 day above. At an equinox the two agree
-//  exactly at every latitude -- the sun rises at 06:00 and sets at 18:00
-//  everywhere on Earth that day. Away from it a winter morning can be light
-//  before the sun is up (no shadows yet), and a polar winter is a bright day
-//  with the sun at or below the horizon, which is what polar twilight is.
+//  DAY LENGTH. Everything the sun drives follows this model in Sectors 1-5,
+//  not only the shadows: daylight() and the night wash, golden hour, the
+//  colour of the key light, the lamps that read daylight(), the player's
+//  flashlight (on while the sun is below the horizon) and the air temperature.
+//  So a December day at Stick City runs from about 07:50 to 16:10 and a June
+//  one from about 04:15 to 19:45, the Green Line keeps a twelve-hour day all
+//  year, and the White Silence has a midnight sun in December and a polar
+//  night in June. At an equinox the sun rises at 06:00 and sets at 18:00 at
+//  every latitude, which is exactly the clock the game had before.
+//
+//  The hour itself is still the clock's (solar time, noon at 12:00), and the
+//  few things keyed to a fixed hour rather than to the light -- the weather
+//  roll, the city's 21:00 night checks -- keep it.
+//
+//  SUN_HIGH_SIN is what counts as a full noon sun for the light's brightness
+//  and colour (sunHeight()). The palettes were authored against a noon of 1;
+//  measured against the zenith instead, a temperate equinox noon would come
+//  out a late-afternoon gold. Anything from about 55 degrees up is full noon;
+//  a winter noon at Stick City (19 degrees) is a low, warm winter sun.
 //
 //  The two alien worlds (6, 7) and the closed interiors have no latitude: they
 //  keep the camera-chosen arc in _skyTerms unchanged (see THE SUN TRAVELS).
@@ -62364,6 +62381,9 @@ const SUN_SHADOW_MIN = 0.25;
 const SUN_SHADOW_MAX = 4.5;
 // Elevation (radians) over which shadows fade in at sunrise and out at sunset.
 const SUN_FADE_EL = 0.05;
+// sin of the elevation that counts as a full noon sun for brightness and
+// colour (see DAY LENGTH).
+const SUN_HIGH_SIN = Math.sin(55 * Math.PI / 180);
 
 // 0 at the March equinox, 0.25 the June solstice, 0.5 the September equinox,
 // 0.75 the December solstice. Advanced by updateWorldClock(), seeded once per
@@ -62401,6 +62421,19 @@ function _solarLatHere() {
 }
 
 function _wrapSeason(p) { p = p % 1; return p < 0 ? p + 1 : p; }
+// Sunrise and sunset, in clock hours (solar time), at a latitude in degrees and
+// a seasonProgress: [rise, set], reused. A polar night is [12, 12] and a
+// midnight sun [0, 24]; with no latitude it is the clock's 06:00 -> 18:00.
+const _solarDay = [SUNRISE_H, SUNRISE_H + DAY_SPAN_H];
+function solarDayHours(latDeg, p) {
+  if (latDeg === null || latDeg === undefined) { _solarDay[0] = SUNRISE_H; _solarDay[1] = SUNRISE_H + DAY_SPAN_H; return _solarDay; }
+  const phi = latDeg * Math.PI / 180, decl = SOLAR_TILT * Math.sin(p * Math.PI * 2);
+  const c = -Math.tan(phi) * Math.tan(decl);
+  if (c >= 1)       { _solarDay[0] = 12; _solarDay[1] = 12; }
+  else if (c <= -1) { _solarDay[0] = 0;  _solarDay[1] = 24; }
+  else { const half = Math.acos(c) / (Math.PI * 2) * 24; _solarDay[0] = 12 - half; _solarDay[1] = 12 + half; }
+  return _solarDay;
+}
 // The season by name, centred on its solstice or equinox -- midsummer is the
 // June solstice. Named for the hemisphere the player is in: the Green Line's
 // south and the White Silence have their summer in December.
@@ -62467,15 +62500,21 @@ let worldClockDtMs = 0;
 // dawn, at dusk, or into the night. A flat 0-24 roll would drop a quarter of
 // all runs into pitch dark before the player has a weapon worth carrying.
 function seedWorldClock() {
+  // A time of year first, picked once and then left to run -- the hour is
+  // chosen against THAT day's sunrise and sunset, where the run starts, so a
+  // December run still opens in daylight rather than an hour before dawn.
+  // At an equinox the spans are exactly the 07:00 / 16:30 / 04:48 they were.
+  if (!seasonLocked) seasonProgress = Math.random();
+  const dayH = solarDayHours(solarLatitude(SOLAR_LATITUDE[currentBiome] ? currentBiome : 1, 0), seasonProgress);
+  const rise = dayH[0], set = dayH[1], night = 24 - (set - rise);
   const r = Math.random();
   let h;
-  if (r < 0.62)      h = 7.0  + Math.random() * 9.5;    // 07:00 - 16:30, ordinary daylight
-  else if (r < 0.80) h = 16.5 + Math.random() * 3.0;    // 16:30 - 19:30, afternoon into dusk
-  else if (r < 0.92) h = 4.8  + Math.random() * 2.2;    // 04:48 - 07:00, dawn
-  else               h = (20.0 + Math.random() * 8.0) % 24;   // night watch
+  if (r < 0.62)      h = rise + 1.0 + Math.random() * Math.max(0, set - rise - 2.5);  // ordinary daylight
+  else if (r < 0.80) h = set - 1.5 + Math.random() * 3.0;    // afternoon into dusk
+  else if (r < 0.92) h = rise - 1.2 + Math.random() * 2.2;   // dawn
+  else               h = set + 2.0 + Math.random() * Math.max(0, night - 4.0);   // night watch
+  h = ((h % 24) + 24) % 24;
   worldTimeMs = DAY_MS * (h / 24);
-  // And a time of year, the same way: picked once, then left to run.
-  if (!seasonLocked) seasonProgress = Math.random();
   clockLastMs = null;                 // do not bill the seeding to the clock
   lastWeatherRollHour = -1;           // let the new hour roll its own sky
   updateSunVector();                  // the first frame is lit by the new hour
@@ -62528,7 +62567,25 @@ function _skyTerms() {
   _skRev++;
 
   const hour = (worldTimeMs / DAY_MS) * 24;
-  const a = Math.sin(((hour - SUNRISE_H) / DAY_SPAN_H) * Math.PI);
+  // The sun's altitude. Under the solar model it is the real one, so the day is
+  // as long as the season and the latitude make it (see DAY LENGTH); otherwise
+  // the clock's 06:00 -> 18:00 arc. Either way +1 is a full noon sun.
+  let a, el = 0, se = 0, E = 0, N = 0, decl = 0, H = 0;
+  if (lat !== null) {
+    const phi = lat * Math.PI / 180;
+    decl = SOLAR_TILT * Math.sin(seasonProgress * Math.PI * 2);
+    H = ((hour - 12) / 24) * Math.PI * 2;
+    const sp = Math.sin(phi), cp = Math.cos(phi), sd = Math.sin(decl), cd = Math.cos(decl);
+    const cH = Math.cos(H), sH = Math.sin(H);
+    se = sp * sd + cp * cd * cH;
+    se = se < -1 ? -1 : se > 1 ? 1 : se;
+    el = Math.asin(se);
+    E = -cd * sH; N = cp * sd - sp * cd * cH;
+    a = se / SUN_HIGH_SIN;
+    a = a < -1 ? -1 : a > 1 ? 1 : a;
+  } else {
+    a = Math.sin(((hour - SUNRISE_H) / DAY_SPAN_H) * Math.PI);
+  }
   _skAlt = a;
 
   const t = (a + 0.10) / 0.36;
@@ -62573,14 +62630,6 @@ function _skyTerms() {
   if (lat !== null) {
     // SEASONS AND LATITUDE: the real sun for where the player is standing.
     const phi = lat * Math.PI / 180;
-    const decl = SOLAR_TILT * Math.sin(seasonProgress * Math.PI * 2);
-    const H = ((hour - 12) / 24) * Math.PI * 2;
-    const sp = Math.sin(phi), cp = Math.cos(phi), sd = Math.sin(decl), cd = Math.cos(decl);
-    const cH = Math.cos(H), sH = Math.sin(H);
-    let se = sp * sd + cp * cd * cH;
-    se = se < -1 ? -1 : se > 1 ? 1 : se;
-    const el = Math.asin(se);
-    const E = -cd * sH, N = cp * sd - sp * cd * cH;
     const hz = Math.sqrt(E * E + N * N);
     // Straight overhead the bearing is undefined for an instant; the shadow is
     // at its shortest there, and the last bearing holds until it is defined.
@@ -62709,8 +62758,22 @@ function worldTemperatureF() {
   const hi = c.nightF[1] + (c.dayF[1] - c.nightF[1]) * d;
   let t = lo + (hi - lo) * w;
   if (isRaining) t -= 6;
+  // The season. A sector's authored bands are its equinox climate; the year
+  // swings them by SEASON_TEMP_PER_DEG for every degree from the equator
+  // (none at the Green Line, about 19 degrees F either way at Stick City),
+  // capped, opposite in the south, and a month behind the sun the way real
+  // seasons lag their solstice.
+  if (SUN.solar) {
+    const latDeg = SUN.lat * 180 / Math.PI;
+    let swing = SEASON_TEMP_PER_DEG * latDeg;
+    swing = swing > SEASON_TEMP_MAX ? SEASON_TEMP_MAX : swing < -SEASON_TEMP_MAX ? -SEASON_TEMP_MAX : swing;
+    t += swing * Math.sin((seasonProgress - SEASON_TEMP_LAG) * Math.PI * 2);
+  }
   return t;
 }
+const SEASON_TEMP_PER_DEG = 0.4;          // degrees F of seasonal swing per degree of latitude
+const SEASON_TEMP_MAX = 25;               // the swing's ceiling, either way
+const SEASON_TEMP_LAG = 1 / 12;           // a month behind the sun
 
 function worldClockLabel() {
   const h = worldHour();
