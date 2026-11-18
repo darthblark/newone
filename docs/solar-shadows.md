@@ -207,10 +207,33 @@ The sun itself costs nothing measurable: about a dozen trigonometric calls
 when the clock, season or latitude moves, none per caster, no allocation
 (`check-solar.js` asserts the last). What a low sun costs is the longer
 shadows and the casters just off screen: more tree crowns in the cel
-pre-pass, a few more props and figures drawn at the edge, and in the rig a
-height buffer 1.5x the screen on each axis and a march of up to 28 steps
-(fewer than before at a high sun, because it now stops once the ray clears
-the tallest height). Frame timings are in the section below.
+pre-pass, a few more props and figures drawn at the edge, and, where the rig
+casts the sun, a height buffer 1.5x the screen on each axis and a march of up
+to 28 steps (fewer than before at a high sun, because it now stops once the
+ray clears the tallest height).
+
+Real `draw()` frames in headless Chromium with SwiftShader (the GPU emulated
+on the CPU, so every pass is paid in software and only the comparison means
+anything), at a phone's geometry (412x892 at pixel density 2), WebGL rig
+running, median of 60 frames, two runs each:
+
+| scene | before | after |
+|---|---|---|
+| Stick City, 80 model-drawn figures, March 07:30 | 416 / 405 ms | 481 / 485 ms |
+| Stick City, 80 figures, December noon | 387 / 395 ms | 408 / 425 ms |
+| Undercity forest, March 07:00 | 436 / 425 ms | 457 / 457 ms |
+| Dry Gulch town (the rig casts), March 07:00 | 7.7 / 11.5 ms | 9.8 / 8.8 / 10.8 ms |
+
+The cost is the long shadows doing their work, and it is largest at a low sun
+in a crowd: in that Stick City dawn about 35 ms was figures' shadows reaching
+and climbing more walls (each fold is another model draw, at most 24 a frame)
+and about 15 ms figures just off screen kept for their shadow. The rig's
+bigger height buffer cost a similar amount in the cel levels while it was
+allocated there for nothing, which is why it now exists only where the rig
+casts the sun. In the desert, where the rig does cast it, the margin and the
+longer march together are within run-to-run noise. None of this has been
+measured on a phone, where the model draws and texture work run on real GPU
+hardware.
 
 ## Checks
 
