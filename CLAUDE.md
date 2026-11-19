@@ -2680,7 +2680,9 @@ the old seven frames. A figure the 3D model drew stays the model (`c.model3D`) f
 shot to the stamp, every death type, player and enemy alike (`tools/player3d/fall.js`):
 an ordinary death blends from its last drawn pose to exactly `player3DCorpseSkeleton(c)`
 at progress 1 (limbs paired by side); thrown pieces carry the living pose in their own
-frames; a wall slump blends into its own pose. The corpse uses the 2D rig's limb widths,
+frames, the dismemberments (3, 10, 13, 14, 15) included, each living part in exactly one
+piece and each piece ending on its share of the corpse rig; gibs (5) grow out of the parts
+they came from; a wall slump blends into its own pose. The corpse uses the 2D rig's limb widths,
 keeps hair, a closed face and the NM-0 insignia mesh, and model stamps are budgeted
 (`MODEL_STAMPS_PER_FRAME`). Only timing comes from Blender, never the end pose. See
 [Death falls](docs/death-falls.md) and `tools/check-death-fall.js`.

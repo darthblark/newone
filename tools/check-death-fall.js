@@ -158,6 +158,86 @@ probe('c.wallSit.age=PLAYER3D_SLUMP_BLEND;');
 ok('wall slump: after the blend it is the slump', P('player3DSeatBlend(c,seat)===seat'));
 probe('c.wallSit=null;');
 
+// The rarer dismemberments: a melee cut at the waist (3, 13), a body torn
+// into torso, arms and legs (10, 15), a dash splitting it down the middle
+// (14). Every piece draws its share of the living pose at birth, every
+// living part is in exactly one piece, and each lies down on the Blender
+// clock to its share of the corpse rig.
+probe(`window.pieceList=()=>{const out=[],add=(holder,rot0,region)=>out.push({holder,rot0,region});
+  if(c.dT===10||c.dT===15){for(const p of c.overkillBits)add(p,p.born.rot,p.type==='torso'?'torso':p.type==='lArm'?'leftArm':'rightArm');
+    add(c._legs3D||(c._legs3D={}),c.mA,'legs');}
+  if(c.dT===3||c.dT===13){const h=corpseSplitPieces(c),r0=c.dT===3?c.mA:c.aA;add(h[0],r0,'legs');add(h[1],r0,'upper');}
+  if(c.dT===14)add(c.lH,c.splitA,'whole');
+  return out;};
+  window.pieceStart=()=>{const lp=livePose.parts.filter(q=>!/^weapon_|^held_/.test(q.part)),seen={},cnt={};let worst=0;
+    lp.forEach(q=>{const k=q.part+':'+q.mesh;cnt[k]=(cnt[k]||0)+1;});
+    for(const pc of pieceList()){const s=player3DPieceSnapshot(c,pc.holder,pc.rot0,pc.region),co=Math.cos(pc.rot0),si=Math.sin(pc.rot0);
+      for(const q of s.parts){if(/^cut_|^dropped_|^weapon_|^fallen_/.test(q.part))continue;
+        const k=q.part+':'+q.mesh;seen[k]=(seen[k]||0)+1;const L=lp.filter(z=>z.part===q.part&&z.mesh===q.mesh)[seen[k]-1];
+        if(!L){worst=Infinity;continue;}const m=q.matrix;
+        worst=Math.max(worst,Math.hypot(co*m[12]-si*m[13]-L.matrix[12],si*m[12]+co*m[13]-L.matrix[13],m[14]-L.matrix[14]));}}
+    // A body burned black (15) loses its insignia with its colours, at once.
+    const burnt=k=>c.id.isCharred&&/^nm0_insignia/.test(k);
+    return {worst,once:Object.keys(cnt).every(k=>seen[k]===cnt[k]||burnt(k)&&!seen[k])&&Object.keys(seen).every(k=>seen[k]===cnt[k])};};`);
+for (const [dT, type] of [[3, 'FEMALE_PISTOL'], [13, 'NORMAL'], [10, 'NM0_GREY_FATIGUE'], [15, 'NORMAL'], [14, 'ARMORED_STANDARD'], [14, 'NORMAL']]) {
+  const tag = `${type} dT ${dT}`;
+  shoot(type, 0.4, 2.8, { dT });
+  ok(`${tag}: comes apart on the model`, P('player3DPieceDeath(c)&&player3DPieceActive(c)'));
+  const start = P('pieceStart()');
+  ok(`${tag}: every living part is in exactly one piece`, start.once);
+  // The pieces rebuild the parts from the same joints the living model drew;
+  // a part lands within a unit of where it stood (the fall's own tolerance).
+  ok(`${tag}: frame 0 is the living figure`, start.worst < 1, start.worst.toFixed(3));
+  let worst = 0, frames = 0, prev = null, settledEarly = false;
+  while (P('player3DPieceActive(c)') && frames < 200) {
+    probe('frameCount++;c.update();'); frames++;
+    // Keyed by part and mesh: a hat changes its name once it is off the head.
+    const now = P(`pieceList().map(pc=>{const out={},n={};for(const q of player3DPieceSnapshot(c,pc.holder,pc.rot0,pc.region).parts){
+      if(/^cut_|^dropped_|^weapon_|^fallen_|^headwear|^helmet/.test(q.part))continue;const k=q.part+':'+q.mesh;n[k]=(n[k]||0)+1;
+      out[k+':'+n[k]]=[q.matrix[12],q.matrix[13],q.matrix[14]];}return out;})`);
+    if (prev) now.forEach((list, i) => Object.keys(list).forEach(k => { const q = list[k], r = prev[i][k]; if (r) worst = Math.max(worst, Math.hypot(q[0] - r[0], q[1] - r[1], q[2] - r[2])); }));
+    prev = now;
+    if (frames === 20) settledEarly = P(`(()=>{const k={b:c.bloodTimer,s:c.smokeTimer,m:c.stopMotionTimer,t:c.bT,sep:c.sep};
+      c.bloodTimer=c.smokeTimer=c.stopMotionTimer=c.bT=0;c.sep=corpseSepMax(c.dT);const r=corpseSettled(c);
+      c.bloodTimer=k.b;c.smokeTimer=k.s;c.stopMotionTimer=k.m;c.bT=k.t;c.sep=k.sep;return r;})()`);
+  }
+  ok(`${tag}: the pieces go down on the Blender clock`, frames === P('player3DFallCurve(player3DPieceKey(c)).settle'), `${frames} frames`);
+  // Measured at the part centres, past the joints: a torn-off arm whips a
+  // little faster than a falling one (about 8 a frame at the hand, rising and
+  // falling over several frames), and a pop would be several times that.
+  ok(`${tag}: no part jumps on the way`, worst < 9, worst.toFixed(2));
+  ok(`${tag}: a body still coming apart is not stamped`, settledEarly === false);
+  ok(`${tag}: and ends on its share of the corpse rig`, P(`pieceList().every(pc=>{const f=player3DFallBlend(pc.holder.local3D,pc.holder.end3D,player3DPieceKey(c),player3DPieceAge(c),0),e=pc.holder.end3D;
+    return [['head'],['pelvis']].every(([k])=>Math.hypot(f.pose[k].x-e[k].x,f.pose[k].y-e[k].y,f.pose[k].z-e[k].z)<1e-9)&&
+      f.pose.arms.every((a,i)=>Math.hypot(a.fist.x-e.arms[i].fist.x,a.fist.y-e.arms[i].fist.y,a.fist.z-e.arms[i].fist.z)<1e-9);})`));
+  if (dT !== 14) ok(`${tag}: its pieces carry the 2D corpse's sleeves, not the living ones`, P(`pieceList().filter(pc=>pc.region!=='legs').every(pc=>{
+    const f=player3DFallBlend(pc.holder.local3D,pc.holder.end3D,player3DPieceKey(c),player3DPieceAge(c),0);
+    return f.pose.arms.every((a,i)=>Math.abs(a.widths[0]-pc.holder.end3D.arms[i].widths[0])<1e-9&&a.widths[0]<c.model3D.arms[0].widths[0]);})`));
+  // Off screen, or on a level change, the pieces finish with everything else.
+  shoot(type, 0.4, 2.8, { dT });
+  probe('finishCorpsePieces(c);');
+  ok(`${tag}: finishing the pieces finishes the model`, !P('player3DPieceActive(c)'));
+  shoot(type, 0.4, 2.8, { dT, noModel: true });
+  ok(`${tag}: a native body keeps the native fragments`, !P('player3DPieceDeath(c)'));
+}
+// A dash split ends on the halves it always drew, weapon and all.
+shoot('NORMAL', 0.4, 2.8, { dT: 14 });
+probe('for(let i=0;i<80;i++){frameCount++;c.update();}');
+ok('dT 14: once down, the halves are the static corpse', !P('player3DPieceActive(c)') && P('c.fP') >= 1);
+// Gibs: the living parts become the bits.
+shoot('NORMAL', 0.4, 2.8, { dT: 5 });
+ok('gibs: a model-drawn body bursts on the model', P('player3DPieceDeath(c)&&player3DPieceActive(c)'));
+const gib0 = P(`(()=>{const b=player3DGibBurst(c),seen={};let worst=0;
+  for(const q of livePose.parts.filter(q=>!/^weapon_|^held_/.test(q.part))){const k=q.part+':'+q.mesh;seen[k]=(seen[k]||0)+1;
+    const m=b.filter(z=>z.part===q.part&&z.mesh===q.mesh)[seen[k]-1];if(!m)return Infinity;
+    worst=Math.max(worst,Math.hypot(m.matrix[12]-q.matrix[12],m.matrix[13]-q.matrix[13],m.matrix[14]-q.matrix[14]));}
+  return worst;})()`);
+ok('gibs: frame 0 is the living figure', gib0 < 1, String(gib0));
+probe('for(let i=0;i<PLAYER3D_GIB_BURST;i++){frameCount++;c.update();}');
+ok('gibs: after the burst the bits are the gibs the native painter drew', !P('player3DPieceActive(c)') &&
+  P(`JSON.stringify(player3DGibBurst(c))===JSON.stringify(player3DCorpseGibParts(c,c.bits))`));
+ok('gibs: the weapon has fallen to the floor', P(`player3DFallWeapons(c,c.model3D,player3DPieceWeaponAge(c),undefined).every(q=>/^dropped_/.test(q.part))`));
+
 // ---- the NM-0 regular's insignia -------------------------------------------
 const marks = P(`['NORMAL','NM0_ROOKIE','FEMALE_PISTOL','NM0_GREY_FATIGUE'].map(t=>{const e=new Character(0,0,false,t);e.aimAngle=.4;
   const s=player3DPose(e),m=s.parts.find(q=>q.part==='nm0_insignia'),t2=s.parts.find(q=>q.part==='torso');

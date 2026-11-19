@@ -220,9 +220,14 @@ function player3DFallLocalize(s, ox, oy, rot, k, pivot) {
   const L=q=>{const x=q.x-ox,y=q.y-oy;return {x:(co*x+si*y)/k+px,y:(-si*x+co*y)/k+py,z:q.z/k};};
   const h=-rot*.5,a=[Math.cos(h),0,0,Math.sin(h)],b=s.q;
   const q=[a[0]*b[0]-a[3]*b[3],a[0]*b[1]-a[3]*b[2],a[0]*b[2]+a[3]*b[1],a[0]*b[3]+a[3]*b[0]];
+  // Held props come along: a matrix's axes turn and scale, its origin moves.
+  const LM=m=>{const o=new Float32Array(m);
+    for(const i of [0,4,8]){const x=m[i],y=m[i+1];o[i]=(co*x+si*y)/k;o[i+1]=(-si*x+co*y)/k;o[i+2]=m[i+2]/k;}
+    const at=L({x:m[12],y:m[13],z:m[14]});o[12]=at.x;o[13]=at.y;o[14]=at.z;return o;};
   return {...s,head:L(s.head),chest:L(s.chest),pelvis:L(s.pelvis),
     arms:s.arms.map(arm=>({...arm,shoulder:L(arm.shoulder),elbow:L(arm.elbow),fist:L(arm.fist)})),
     legs:s.legs.map(leg=>({...leg,hip:L(leg.hip),knee:L(leg.knee),ankle:L(leg.ankle),heading:leg.heading-rot})),
+    props:(s.props||[]).map(q=>({...q,matrix:LM(q.matrix)})),
     q,torsoDepth:s.torsoDepth/k,torsoWidth:s.torsoWidth/k,torsoLength:s.torsoLength/k,headRadius:s.headRadius/k,
     facing:s.facing-rot,cache:null};
 }
@@ -262,7 +267,9 @@ function player3DFallProp(part, target, u) {
   const x=a.p.x+(b.p.x-a.p.x)*u,y=a.p.y+(b.p.y-a.p.y)*u,z=a.p.z+(b.p.z-a.p.z)*u*u;
   // It is the same object all the way down: its own mesh and colour until
   // it is nearly there, then the resting prop's.
-  const late=u>=.5,col=part.color.map((v,i)=>v+((target.color[i]===undefined?v:target.color[i])-v)*u);
+  // A part drawn by its materials alone (the insignia) has no flat colour.
+  const from=part.color||target.color,to=target.color||from,late=u>=.5;
+  const col=from?from.map((v,i)=>v+((to[i]===undefined?v:to[i])-v)*u):null;
   return {...(late?target:part),color:col,matrix:new Float32Array([A.x.x*sc[0],A.x.y*sc[0],A.x.z*sc[0],0,A.y.x*sc[1],A.y.y*sc[1],A.y.z*sc[1],0,
     A.z.x*sc[2],A.z.y*sc[2],A.z.z*sc[2],0,x,y,z,1])};
 }
@@ -272,25 +279,34 @@ function player3DFallSnapshot(c) {
   if(!s.isPlayer)proxy.hp=s.helmet?100:0;
   const snapshot=player3DPose(proxy,{identity:player3DCorpseIdentity(c),pose:frame.pose,weapon:false,angle:frame.heading});
   snapshot.worldOrigin=player3DCorpseWorldOrigin(c);
-  // Weapons: the dropped weapon's resting place, reached from the hand.
-  const u=Math.max(0,Math.min(1,frame.t/PLAYER3D_FALL_WEAPON_DROP)),ease=u*u*(3-2*u);
-  const rest=player3DCorpseDroppedWeapons(c,{parts:[],bounds:[0,0,0,0]},1,frame.end.yaw).parts;
-  const held=s.props.filter(q=>/^weapon_/.test(q.part));
-  for(let i=0;i<rest.length;i++)snapshot.parts.push(held[i]?player3DFallProp(held[i],rest[i],ease):rest[i]);
-  if(u<1)for(const q of s.props)if(!/^weapon_/.test(q.part)||!rest[held.indexOf(q)]){
-    const m=new Float32Array(q.matrix);m[14]*=1-ease;snapshot.parts.push({...q,matrix:m});
-  }
-  // A hat that comes off leaves the head as it goes back, and lies where the
-  // corpse's own fallen hat lies.
-  const hat=typeof player3DCorpseHatPart==='function'&&player3DCorpseHatPart(c,frame.end.head,frame.end.yaw);
-  if(hat){
-    const on=snapshot.parts.findIndex(q=>q.part==='headwear'||q.part==='helmet');
-    const v=Math.max(0,Math.min(1,(player3DFallSample(player3DFallCurve(c.fall.curve),'head',frame.t)-.35)/.65));
-    // Until it is clear of the head it is still headwear (and still hides hair).
-    if(on>=0)snapshot.parts[on]=player3DFallProp(snapshot.parts[on],hat,v*v*(3-2*v));
-    else snapshot.parts.push(hat);
-  }
+  snapshot.parts.push(...player3DFallWeapons(c,s,frame.t,frame.end.yaw));
+  player3DFallHat(c,snapshot,frame.end,player3DFallSample(player3DFallCurve(c.fall.curve),'head',frame.t));
   return snapshot;
+}
+
+// Weapons: the dropped weapon's resting place, reached from the hand. s is
+// the capture in the frame the parts are drawn in; yaw is the corpse's.
+function player3DFallWeapons(c, s, t, yaw) {
+  const u=Math.max(0,Math.min(1,t/PLAYER3D_FALL_WEAPON_DROP)),ease=u*u*(3-2*u),out=[];
+  const rest=player3DCorpseDroppedWeapons(c,{parts:[],bounds:[0,0,0,0]},1,yaw).parts;
+  const props=s.props||[],held=props.filter(q=>/^weapon_/.test(q.part));
+  for(let i=0;i<rest.length;i++)out.push(held[i]?player3DFallProp(held[i],rest[i],ease):rest[i]);
+  if(u<1)for(const q of props)if(!/^weapon_/.test(q.part)||!rest[held.indexOf(q)]){
+    const m=new Float32Array(q.matrix);m[14]*=1-ease;out.push({...q,matrix:m});
+  }
+  return out;
+}
+
+// A hat that comes off leaves the head as the head goes back (head is that
+// channel's progress), and lies where the corpse's own fallen hat lies.
+function player3DFallHat(c, snapshot, end, head) {
+  const hat=typeof player3DCorpseHatPart==='function'&&player3DCorpseHatPart(c,end.head,end.yaw);
+  if(!hat)return;
+  const on=snapshot.parts.findIndex(q=>q.part==='headwear'||q.part==='helmet');
+  const v=Math.max(0,Math.min(1,(head-.35)/.65));
+  // Until it is clear of the head it is still headwear (and still hides hair).
+  if(on>=0)snapshot.parts[on]=player3DFallProp(snapshot.parts[on],hat,v*v*(3-2*v));
+  else snapshot.parts.push(hat);
 }
 
 // A falling body is still standing up, so it keeps the living figure's
@@ -316,14 +332,14 @@ function player3DFallRenderOptions(r, c, snapshot) {
 // body on its back is most of the way down, closed eyes and a nose in place
 // of the model's open ones. It rides the head's projected centre and turns
 // with it: the fall's own heading while it falls, the corpse frame's after.
-function player3DCorpseHead(r, c, snapshot, falling) {
+function player3DCorpseHead(r, c, snapshot, falling, piece) {
   const head=snapshot.parts.find(q=>q.part==='head');if(!head||c.swordHeadless||c.dT===4||c.dT===9)return;
-  const id=c.id||{},p=c.fall||{faceDown:!!c.backFacing},f=Math.max(0,Math.min(1,c.fP||0));
+  const id=c.id||{},p=c.fall||{faceDown:!!c.backFacing},f=Math.max(0,Math.min(1,piece?piece.progress:c.fP||0));
   const hair=(id.hairStyle!==undefined||id.eType==='FEMALE_PISTOL'||id.eType==='NM0_ROOKIE_F')&&typeof drawFigureHair==='function'&&
     !snapshot.parts.some(q=>q.part==='headwear'||q.part==='helmet');
   const face=!p.faceDown&&!c.backFacing&&f>.45&&typeof drawFallenFace==='function';
   if(!hair&&!face)return;
-  const yaw=falling&&c.fall3D&&c.fall3D.cache?c.fall3D.cache.headHeading:
+  const yaw=piece?piece.yaw:falling&&c.fall3D&&c.fall3D.cache?c.fall3D.cache.headHeading:
     (c.fall?figureFallYaw(c.fall,c.rag):(c.aA||0)+(c.rag&&c.rag.ang||0))+(typeof figureHeadTurn==='function'?figureHeadTurn(c.fall,f):0);
   const m=head.matrix,size=Math.hypot(m[0],m[1],m[2])/5.5,o={x:m[12],y:m[13],z:m[14]};
   const P=q=>player3DOverlayPoint(snapshot,q);
@@ -334,9 +350,9 @@ function player3DCorpseHead(r, c, snapshot, falling) {
 }
 
 // The model's own open eyes and brows give way to the painted closed face.
-function player3DCorpseCloseEyes(c, snapshot) {
+function player3DCorpseCloseEyes(c, snapshot, progress) {
   const p=c.fall||{faceDown:!!c.backFacing};
-  if(p.faceDown||c.backFacing||!((c.fP||0)>.45))return;
+  if(p.faceDown||c.backFacing||!((progress===undefined?c.fP||0:progress)>.45))return;
   const head=snapshot.parts.find(q=>q.part==='head');if(!head)return;
   const skin=(snapshot.palette&&snapshot.palette.skin||head.color||[235,180,140]).map(v=>v/255);
   head.materials={...(head.materials||{}),ink:skin,wood:skin};
@@ -366,3 +382,188 @@ function player3DSeatBlend(c, pose) {
     headRadius:lerp(s.headRadius,pose.headRadius)};
 }
 
+
+// ---- Bodies that come apart ---------------------------------------------
+// The rarer dismemberments -- a melee cut at the waist (3, 13), a body torn
+// into torso, arms and legs (10, 15), a dash or shockwave splitting it down
+// the middle (14) and gibs (5) -- start where the living figure stood too.
+// Their pieces keep their native flight, spin, wall impacts, blood and
+// smoke; what each piece draws in its own frame is its share of the living
+// pose at birth, lying down on the Blender clock while it flies, and ending
+// on its share of the corpse rig placed where the native piece lies.
+const PLAYER3D_PIECE_DEATHS = [3, 5, 10, 13, 14, 15];
+// Gibs are a burst, not a fall: the body's parts become the bits.
+const PLAYER3D_GIB_BURST = 10;
+const PLAYER3D_CUT_GROW = 6;
+
+function player3DPieceDeath(c) {
+  return !!(c&&c.model3D&&PLAYER3D_PIECE_DEATHS.indexOf(c.dT)>=0);
+}
+function player3DPieceKey(c) { return c.backFacing?'FORWARD':'BACKWARD'; }
+function player3DPieceSettle(c) {
+  if(c.dT===5)return PLAYER3D_GIB_BURST;
+  const curve=player3DFallCurve(player3DPieceKey(c));
+  return curve?curve.settle:54;
+}
+function player3DPieceAge(c) { return Math.min(c.model3D&&c.model3D.pieceAge||0,player3DPieceSettle(c)); }
+function player3DPieceActive(c) { return player3DPieceDeath(c)&&player3DPieceAge(c)<player3DPieceSettle(c); }
+// One tick per corpse update; off screen the pieces are finished at once,
+// so the pose is too.
+function player3DPieceTick(c, finish) {
+  if(!player3DPieceDeath(c))return;
+  const s=c.model3D,end=player3DPieceSettle(c);
+  s.pieceAge=finish?end:Math.min(end,(s.pieceAge||0)+1);
+}
+// Where each thrown piece left from (they are all born on the body).
+function player3DPieceBirth(c) {
+  for(const list of [c.overkillBits,c.aerialBits])if(list)for(const q of list)
+    if(!q.born)q.born={x:q.x||0,y:q.y||0,rot:q.rot||0};
+}
+
+// A skeleton turned about z by rot and moved by (tx, ty).
+function player3DPlaceSkeleton(s, rot, tx, ty) {
+  const co=Math.cos(rot),si=Math.sin(rot);
+  const P=q=>({x:co*q.x-si*q.y+tx,y:si*q.x+co*q.y+ty,z:q.z});
+  const V=q=>q&&{x:co*q.x-si*q.y,y:si*q.x+co*q.y,z:q.z};
+  return {...s,head:P(s.head),chest:P(s.chest),pelvis:P(s.pelvis),
+    arms:s.arms.map(a=>({...a,shoulder:P(a.shoulder),elbow:P(a.elbow),fist:P(a.fist)})),
+    legs:s.legs.map(l=>({...l,hip:P(l.hip),knee:P(l.knee),ankle:P(l.ankle),heading:(l.heading||0)+rot})),
+    forward:V(s.forward),up:V(s.up),yaw:(s.yaw||0)+rot};
+}
+
+// Each region of the corpse rig, laid in its piece's frame where the native
+// piece is drawn: a torso across the piece with the head at -y, legs along
+// it with the hips forward, an arm running out along +x from its stump.
+// 'whole' is a body cut down the middle: both halves draw the full corpse.
+function player3DPieceEnd(c, region) {
+  if(region==='whole')return player3DCorpseSkeleton(c,{progress:1});
+  const s=player3DCorpseSkeleton(c,{progress:1,rig:projectFallRig(c.bW||21,c.bH||27,1),angle:0});
+  const at=(rot,q,x,y)=>{const co=Math.cos(rot),si=Math.sin(rot);
+    return player3DPlaceSkeleton(s,rot,x-(co*q.x-si*q.y),y-(si*q.x+co*q.y));};
+  if(region==='legs')return at(-Math.atan2(s.head.y-s.pelvis.y,s.head.x-s.pelvis.x),s.pelvis,8,0);
+  if(region==='leftArm'||region==='rightArm'){
+    const a=s.arms[region==='leftArm'?0:1];
+    return at(-Math.atan2(a.fist.y-a.shoulder.y,a.fist.x-a.shoulder.x),a.shoulder,-8,0);
+  }
+  return at(-Math.PI/2-Math.atan2(s.head.y-s.pelvis.y,s.head.x-s.pelvis.x),s.chest,0,0);
+}
+
+function player3DPieceHas(q, region) {
+  const tag=q.part||'',arm=/^(upper_arm|forearm|hand|armor_shoulder)_(left|right)$/.exec(tag);
+  if(region==='whole')return true;
+  if(region==='legs')return player3DCorpsePartIs(q,'legs');
+  if(region==='leftArm'||region==='rightArm')return !!arm&&arm[2]===(region==='leftArm'?'left':'right');
+  if(region==='upper')return !player3DCorpsePartIs(q,'legs');
+  return !player3DCorpsePartIs(q,'legs')&&!arm;
+}
+
+// The blood where a piece was torn off: a flat disc at the cut, which tops
+// the stump while it stands and lies at its end once it is down.
+function player3DPieceCuts(c, pose, region, t) {
+  const g=Math.min(1,t/PLAYER3D_CUT_GROW);if(!(g>0)||region==='whole')return [];
+  const col=c.isCharred?[38,12,12]:[90,0,0],out=[];
+  const cap=(q,r,name)=>out.push(player3DCorpsePrimitive('head',q.x,q.y,q.z+.8,r*g,r*.9*g,1.3,col,0,name));
+  const waist=Player3DMath.mix(pose.pelvis,pose.chest,.3);
+  if(region==='legs'||region==='torso'||region==='upper')cap(waist,6,'cut_waist');
+  if(region==='torso')pose.arms.forEach((a,i)=>cap(a.shoulder,3,'cut_shoulder_'+i));
+  if(region==='leftArm'||region==='rightArm')cap(pose.arms[region==='leftArm'?0:1].shoulder,3,'cut_shoulder');
+  return out;
+}
+
+// One piece's model, in its own frame, once a frame. holder is the piece
+// record (or any object kept for it); rot0 is the frame it was born in.
+function player3DPieceSnapshot(c, holder, rot0, region) {
+  const s=c.model3D,t=player3DPieceAge(c),key=t+'|'+region;
+  if(holder.snap3D&&holder.snapKey===key)return holder.snap3D;
+  const local=holder.local3D||(holder.local3D=player3DFallLocalize(s,0,0,rot0,1,null));
+  const end=holder.end3D||(holder.end3D=player3DPieceEnd(c,region));
+  const curveKey=player3DPieceKey(c),frame=player3DFallBlend(local,end,curveKey,t,end.yaw);
+  const proxy=player3DCorpseProxy(c);if(!s.isPlayer)proxy.hp=s.helmet?100:0;
+  let snap=player3DPose(proxy,{identity:player3DCorpseIdentity(c),pose:frame.pose,weapon:false,angle:frame.heading});
+  snap.worldOrigin=player3DCorpseWorldOrigin(c);
+  const curve=player3DFallCurve(curveKey),progress=Math.max(0,Math.min(1,player3DFallSample(curve,'projected',t)));
+  if(region!=='legs'&&region!=='leftArm'&&region!=='rightArm')
+    player3DFallHat(c,snap,end,player3DFallSample(curve,'head',t));
+  const parts=snap.parts.filter(q=>player3DPieceHas(q,region));
+  // A body cut down the middle still drops its weapon inside the halves.
+  if(region==='whole')parts.push(...player3DFallWeapons(c,local,t,undefined));
+  parts.push(...player3DPieceCuts(c,frame.pose,region,t));
+  snap={...snap,parts,bounds:player3DCorpseSnapshot(parts).bounds};
+  player3DCorpseCloseEyes(c,snap,progress);
+  snap.piece={yaw:frame.headHeading,progress,t};
+  holder.snap3D=snap;holder.snapKey=key;
+  return snap;
+}
+
+// Draws a piece, and the head's hair and closed face on the ones that carry
+// a head, inside the piece's transform.
+function player3DDrawPiece(r, c, holder, rot0, region) {
+  const snap=player3DPieceSnapshot(c,holder,rot0,region);
+  player3DCorpseRender(r,snap);
+  if(region==='torso'||region==='upper')player3DCorpseHead(r,c,snap,false,snap.piece);
+  return snap;
+}
+
+// The weapon of a body that came apart falls from the hand to where the
+// corpse's dropped weapon lies, in the corpse's own frame.
+function player3DPieceWeapons(r, c) {
+  const parts=player3DFallWeapons(c,c.model3D,player3DPieceWeaponAge(c),undefined);
+  if(parts.length)player3DCorpseRender(r,player3DCorpseSnapshot(parts,c));
+}
+// A burst is over before a weapon could fall the usual way: it lands with it.
+function player3DPieceWeaponAge(c) {
+  return player3DPieceAge(c)*Math.max(1,PLAYER3D_FALL_WEAPON_DROP/player3DPieceSettle(c));
+}
+
+// While a piece death is under way the pieces keep the living camera, as a
+// falling body does; on the floor the corpse's own view takes over.
+function player3DPieceView(r, c) {
+  return player3DPieceActive(c)&&typeof drawingContext!=='undefined'&&r.drawingContext===drawingContext?{view:true}:null;
+}
+
+// Gibs: each bit grows out of the part of the living body it came from.
+const PLAYER3D_GIB_SOURCES = {skull:['head'],ribcage:['torso'],pelvis:['pelvis'],
+  bone:['thigh_left','thigh_right','upper_arm_left','upper_arm_right'],
+  heart:['nm0_insignia','vest','armor'],brain:['neck','headwear','helmet'],intestine:['shin_left','shin_right'],
+  meat:['forearm_left','forearm_right','shin_left','shin_right','foot_left','foot_right','hand_left','hand_right']};
+
+function player3DGibLiving(c) {
+  const s=c.model3D,F=Player3DQuat.axes(s.q);
+  const pose={head:s.head,chest:s.chest,pelvis:s.pelvis,arms:s.arms,legs:s.legs,forward:F.x,up:F.z,
+    torsoWidth:s.torsoWidth,torsoLength:s.torsoLength,torsoDepth:s.torsoDepth,headRadius:s.headRadius};
+  const proxy=player3DCorpseProxy(c);if(!s.isPlayer)proxy.hp=s.helmet?100:0;
+  return player3DPose(proxy,{identity:player3DCorpseIdentity(c),pose,weapon:false,angle:s.facing}).parts;
+}
+
+function player3DGibPlan(live, bits) {
+  const used=new Set(),primary=bits.map(b=>{
+    for(const name of PLAYER3D_GIB_SOURCES[b.type]||PLAYER3D_GIB_SOURCES.meat){
+      const i=live.findIndex((q,k)=>q.part===name&&!used.has(k));
+      if(i>=0){used.add(i);return i;}
+    }
+    return -1;
+  });
+  // Everything else goes into the bit whose source part was nearest.
+  const at=q=>({x:q.matrix[12],y:q.matrix[13],z:q.matrix[14]});
+  const into=live.map((q,i)=>{
+    const own=primary.indexOf(i);if(own>=0)return own;
+    let best=-1,bd=Infinity;
+    primary.forEach((k,j)=>{if(k<0)return;const a=at(q),b=at(live[k]),d=(a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2;if(d<bd){bd=d;best=j;}});
+    return best;
+  });
+  return {primary,into};
+}
+
+function player3DGibBurst(c) {
+  const s=c.model3D,gibs=player3DCorpseGibParts(c,c.bits),t=player3DPieceAge(c);
+  const u=Math.min(1,t/PLAYER3D_GIB_BURST),ease=u*u*(3-2*u);
+  if(!(u<1))return gibs;
+  const live=s.gibLive||(s.gibLive=player3DGibLiving(c)),plan=s.gibPlan||(s.gibPlan=player3DGibPlan(live,c.bits||[]));
+  const scaled=(q,k,to)=>{const m=new Float32Array(q.matrix);for(const i of [0,1,2,4,5,6,8,9,10])m[i]*=k;
+    if(to)for(let i=12;i<15;i++)m[i]+=(to.matrix[i]-m[i])*ease;return {...q,matrix:m};};
+  const out=[];
+  live.forEach((q,i)=>{const j=plan.into[i];if(j<0)return;
+    out.push(plan.primary[j]===i?player3DFallProp(q,gibs[j],ease):scaled(q,1-ease,gibs[j]));});
+  gibs.forEach((g,j)=>{if(plan.primary[j]<0)out.push(scaled(g,ease,null));});
+  return out;
+}

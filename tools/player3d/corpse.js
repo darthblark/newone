@@ -427,31 +427,61 @@ function drawPlayer3DCorpse(r,c) {
   if(corpsePiecePinned(c.separatedTorso)&&!c._drawWallOverlay)return true;
   if(c.sword){drawSwordCorpse(r,c);return true;}
   if(c.dT===12&&c.exploded)return true;
-  if(c.dT===5){r.push();r.translate(c.x,c.y);try{player3DCorpseRender(r,player3DCorpseSnapshot(player3DCorpseGibParts(c,c.bits)));}finally{r.pop();}return true;}
+  // A model-drawn body that comes apart: each piece leaves the living pose
+  // (tools/player3d/fall.js); a native body keeps the fragments it had.
+  const pieces=typeof player3DPieceDeath==='function'&&player3DPieceDeath(c);
+  const previousView=_player3DCorpseView;
+  if(c.dT===5){r.push();r.translate(c.x,c.y);
+    try{if(pieces)_player3DCorpseView=player3DPieceView(r,c);
+      player3DCorpseRender(r,player3DCorpseSnapshot(pieces?player3DGibBurst(c):player3DCorpseGibParts(c,c.bits)));
+      if(pieces)player3DPieceWeapons(r,c);}
+    finally{_player3DCorpseView=previousView;r.pop();}return true;}
   if(c.dT===10||c.dT===11||c.dT===15){
     r.push();r.translate(c.x,c.y);
     try{
+      if(pieces)_player3DCorpseView=player3DPieceView(r,c);
       for(const p of c.overkillBits||c.aerialBits||[]){if(corpsePiecePinned(p))continue;r.push();
-        try{corpsePieceTransform(r,p);drawPlayer3DCorpseFragment(r,c,p.type==='torso'?'torso':p.type==='legs'?'legs':p.type==='lArm'?'leftArm':'rightArm');}finally{r.pop();}}
-      if(c.dT!==11){r.push();r.rotate(c.mA);r.translate(-15*(c.fP||0),0);r.scale(1-.4*(c.fP||0),1);drawPlayer3DCorpseFragment(r,c,'legs');r.pop();}
-    }finally{r.pop();}player3DCorpseDecals(r,c);return true;
+        const region=p.type==='torso'?'torso':p.type==='legs'?'legs':p.type==='lArm'?'leftArm':'rightArm';
+        try{corpsePieceTransform(r,p);
+          if(pieces)player3DDrawPiece(r,c,p,p.born?p.born.rot:c.aA,region);else drawPlayer3DCorpseFragment(r,c,region);}finally{r.pop();}}
+      if(c.dT!==11){r.push();r.rotate(c.mA);
+        // The legs slide back as they go down, on the fall's own clock.
+        if(pieces){const legs=c._legs3D||(c._legs3D={});
+          r.translate(-15*player3DFallSample(player3DFallCurve(player3DPieceKey(c)),'projected',player3DPieceAge(c)),0);
+          player3DDrawPiece(r,c,legs,c.mA,'legs');}
+        else{r.translate(-15*(c.fP||0),0);r.scale(1-.4*(c.fP||0),1);drawPlayer3DCorpseFragment(r,c,'legs');}
+        r.pop();}
+      if(pieces)player3DPieceWeapons(r,c);
+    }finally{_player3DCorpseView=previousView;r.pop();}player3DCorpseDecals(r,c);return true;
   }
   if(c.dT===3||c.dT===13){
-    const halves=corpseSplitPieces(c);r.push();r.translate(c.x,c.y);
-    try{for(let i=0;i<2;i++){if(corpsePiecePinned(halves[i]))continue;r.push();try{corpsePieceTransform(r,halves[i]);drawPlayer3DCorpseFragment(r,c,i?'upper':'legs');}finally{r.pop();}}}finally{r.pop();}
+    const halves=corpseSplitPieces(c),rot0=c.dT===3?c.mA:c.aA;r.push();r.translate(c.x,c.y);
+    try{if(pieces)_player3DCorpseView=player3DPieceView(r,c);
+      for(let i=0;i<2;i++){if(corpsePiecePinned(halves[i]))continue;r.push();
+        try{corpsePieceTransform(r,halves[i]);
+          if(pieces)player3DDrawPiece(r,c,halves[i],rot0,i?'upper':'legs');else drawPlayer3DCorpseFragment(r,c,i?'upper':'legs');}finally{r.pop();}}
+      if(pieces)player3DPieceWeapons(r,c);}
+    finally{_player3DCorpseView=previousView;r.pop();}
     player3DCorpseDecals(r,c);return true;
   }
   // A body still falling is the model's own fall, which carries its weapon
   // and hat down with it; afterwards they lie where the corpse put them.
   const falling=typeof player3DFallActive==='function'&&player3DFallActive(c);
-  let snapshot=falling?player3DFallSnapshot(c):player3DCorpseDroppedWeapons(c,player3DCorpsePose(c));
-  if(c.hatOff&&!falling)snapshot=player3DCorpseFilter(snapshot,p=>p.part!=='headwear'&&p.part!=='helmet');
+  // A body cut down the middle: both halves leave the living pose together.
+  const halving=c.dT===14&&pieces&&player3DPieceActive(c);
+  let snapshot=halving?player3DPieceSnapshot(c,c.lH,c.splitA||0,'whole'):
+    falling?player3DFallSnapshot(c):player3DCorpseDroppedWeapons(c,player3DCorpsePose(c));
+  // Its fallen hat lies inside the halves, where the cut divides it too.
+  if(c.dT===14&&!halving){const hat=player3DCorpseHatPart(c,snapshot.sockets&&snapshot.sockets.head);
+    if(hat)snapshot={...snapshot,parts:snapshot.parts.concat(hat),bounds:player3DCorpseSnapshot(snapshot.parts.concat(hat)).bounds};}
+  if(c.hatOff&&!falling&&!halving)snapshot=player3DCorpseFilter(snapshot,p=>p.part!=='headwear'&&p.part!=='helmet');
   if(c.swordHeadless||c.dT===4||c.dT===9)snapshot=player3DCorpseFilter(snapshot,p=>!player3DCorpsePartIs(p,'head'));
   if(c._drawWallOverlay)snapshot=player3DCorpseFilter(snapshot,p=>!player3DCorpsePartIs(p,'legs'));
-  player3DCorpseCloseEyes(c,snapshot);
+  if(!halving)player3DCorpseCloseEyes(c,snapshot);
   r.push();r.translate(c.x,c.y);
   try{
     if(falling)_player3DCorpseView=player3DFallRenderOptions(r,c,snapshot);
+    else if(halving)_player3DCorpseView=player3DPieceView(r,c);
     if(c.dT===7){const pool=bloodPoolProgress(c.poolAge,c.blastBlood),spread=Math.sqrt(pool);r.noStroke();r.fill(90,0,0,217*pool);r.ellipse(-4,0,42*spread,25*spread);}
     if(c.dT===9)player3DCorpseRender(r,player3DCorpseSnapshot(player3DCorpseGibParts(c,c.bits)));
     if(c.dT===14){

@@ -89,15 +89,43 @@ Every death type starts from the living pose:
 | explosive deaths (18, 19, 20) | the same per-piece fall |
 | sword decapitation and diagonal cut | the halves fall on the model; the sword's cut still divides them |
 | slump against a wall | the slump's own seat, relax and tip, blended from the living pose over its first 18 frames (`player3DSeatBlend()`) |
+| torn into torso, arms and legs (10, 15: lightning, an armored soldier's dash finisher) | each thrown piece carries its share of the living pose and lies down on the Blender clock while it flies; the legs slide back on the same clock |
+| waist cut (3: melee, 13) | the two halves do the same |
+| split down the middle (14: dash and shockwave finishers) | both halves leave the living pose together; the vertical cut divides it from the first frame, so together they are the whole standing figure |
+| gibs (5: lightning) | a 10-frame burst: each bit grows out of the body part it came from (the skull from the head, the ribcage from the torso, bones from the thighs and upper arms), and the leftover parts shrink into the nearest bit (`player3DGibBurst()`) |
 
 The shotgun's close-range deaths, before (the model swapped for 2D pieces
 already lying) and after (each piece leaves from the standing pose):
 
 ![Shotgun slice, breakup and separation headshot](previews/death-falls-shotgun.png)
 
-The rare dismemberments (lightning gibs, the melee and shockwave splits) are
-drawn on the model too, as pieces from their first frame, as the native
-painter drew them.
+The rarer dismemberments, before (pieces already lying on the first frame)
+and after (every piece leaves the standing body):
+
+![Torn apart, split, cut at the waist and gibs](previews/death-falls-pieces.png)
+
+They keep the native pieces' flight, spin, wall impacts, blood, smoke and
+charring; only what each piece draws in its own frame changed
+(`tools/player3d/fall.js`, from `player3DPieceDeath()` down):
+
+- **Every living part is in exactly one piece** on the first frame, so the
+  pieces together are the figure the model drew a frame earlier.
+- **Each piece ends on its share of the 2D corpse rig**, laid where the native
+  piece lies (a torso across its frame with the head at -y, legs along it,
+  an arm running out from its stump), with the corpse's thin sleeves and
+  palms. The crude stand-in fragments the model used to draw for these
+  deaths, with the living mesh's thick arms, are gone for model bodies.
+- **The cut bleeds**: a flat disc of blood grows at each stump over 6 frames,
+  topping the stump while it stands and lying at its end once it is down.
+- **The weapon falls** from the hand to where a corpse's dropped weapon lies,
+  in the corpse's frame, and stays there; the hat rolls off with the head.
+- A body burned black by lightning takes its colours (and loses its insignia)
+  on the first frame, as the native painter always did.
+
+A body still coming apart is not stamped (`corpseSettled()` waits on
+`player3DPieceActive()`), and off screen or on a level change the pieces
+finish with everything else (`finishCorpsePieces()`). A native body keeps the
+native fragments.
 
 What the native corpse painter drew, the model corpse carries:
 
@@ -128,8 +156,9 @@ chest.
 previous frame (`_player3DLiveSnapshots`), for the player and for every enemy
 `enemy3DLivingEligible()` lets the model draw. A figure the native painter was
 drawing (stunned, leg-injured, mounted, boxing, a citizen) keeps the native
-fall, and so do wall slumps, sword and blast deaths, particle-beam deaths and
-bodies coming apart.
+fall. Wall slumps, blast deaths and bodies coming apart start from the same
+capture through their own paths (the table above); particle-beam deaths keep
+their own.
 
 `player3DFallSkeleton()` blends that pose into the corpse rig at progress 1
 (`player3DCorpseSkeleton()`, the joints the native painter and the stamp have
@@ -182,7 +211,7 @@ where the model draws run on the GPU.
 ## Checks
 
 ```sh
-node tools/check-death-fall.js            # timing, start/end continuity, floor, widths, pieces, slump, insignia, stamp budget
+node tools/check-death-fall.js            # timing, start/end continuity, floor, widths, pieces, dismemberments, gibs, slump, insignia, stamp budget
 node tools/check-falls-and-footwork.js    # the clock (asserts the Blender curve, not the old 0.15 a frame)
 node tools/check-corpse.js                # settle and freeze
 node tools/check-humanoid-corpse-standard.js
