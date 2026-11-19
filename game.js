@@ -53746,6 +53746,40 @@ function celFigureShadeTrees(actor, d, sL, zs, k) {
   d.leaf = CEL_TREE_SHADE;
   return m;
 }
+// A FIGURE'S SHADOW IS ITS OWN SILHOUETTE, SEEN FROM THE SUN.
+//
+// The model is built to be seen from above, and from above two things about
+// it are invisible that a low sun shows in profile. The pelvis sits behind the
+// chest, where the native painter puts the hips, and its back half stands out
+// past the shirt; the NM-0 webbing, plate carrier and the bandit's vest are
+// shells fitted to the torso's box, so their back corners stand proud of its
+// rounded back. Side on, both read as a pack strapped to somebody who carries
+// none. The shadow takes the body as it is: the shells are left out (they hug
+// the torso, which already casts), and the pelvis is drawn pulled in from the
+// back toward its own front edge, so it still joins the thighs. Anything a
+// figure really carries -- the player's jetpack -- still casts.
+const CEL_CAST_SKIP = { vest: 1, armor: 1 };
+const CEL_CAST_PELVIS_DEPTH = 0.6;
+function celFigureCastSnapshot(snapshot) {
+  const src = snapshot && snapshot.parts;
+  if (!src) return snapshot;
+  const parts = [];
+  for (let i = 0; i < src.length; i++) {
+    const p = src[i];
+    if (CEL_CAST_SKIP[p.part]) continue;
+    if (p.part === 'pelvis' && p.matrix && p.matrix.length === 16) {
+      const m = p.matrix, k = CEL_CAST_PELVIS_DEPTH, q = new Float32Array(m);
+      // Column 0 is the pelvis's front-to-back half-depth: shrink it about the
+      // front edge, so the back comes in and the front stays where it was.
+      q[0] = m[0] * k; q[1] = m[1] * k; q[2] = m[2] * k;
+      q[12] = m[12] + m[0] * (1 - k); q[13] = m[13] + m[1] * (1 - k); q[14] = m[14] + m[2] * (1 - k);
+      parts.push({ ...p, matrix: q });
+      continue;
+    }
+    parts.push(p);
+  }
+  return { ...snapshot, parts };
+}
 function celFigureCast3D(actor, snapshot, ctx, options) {
   if (!celScene() || actor.isCorpse || typeof ctx.getTransform !== 'function') return null;
   const day = Math.min(1, shadowDensity() * 3.2);
@@ -53773,9 +53807,10 @@ function celFigureCast3D(actor, snapshot, ctx, options) {
     _celCastOpts.shade = shade;
     const ga = ctx.globalAlpha;
     ctx.globalAlpha = ga * A;
-    try { Player3D.draw(snapshot, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; _celCastOpts.shade = null; }
+    const castSnap = celFigureCastSnapshot(snapshot);
+    try { Player3D.draw(castSnap, ctx, _celCastOpts); } finally { ctx.globalAlpha = ga; _celCastOpts.shade = null; }
     if (_depthOn) {
-      celFigureWalls(actor, 0, A, k, { snapshot, T, include: options.includeParts, exclude: options.excludeParts });
+      celFigureWalls(actor, 0, A, k, { snapshot: castSnap, T, include: options.includeParts, exclude: options.excludeParts });
       celFigureWallFlushNow();
     }
   }
