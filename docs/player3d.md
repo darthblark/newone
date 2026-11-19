@@ -1,10 +1,13 @@
 # Blender player models
 
 The player and ordinary hostile human enemies use an articulated 3D mesh
-rendered through WebGL2 at the game's existing Canvas actor slots. Player
-corpses use the same model; enemy corpses keep their native painter. A
-model-drawn figure that dies goes down as the model, through the falls authored
-in Blender, and lands on that corpse ([Death falls](death-falls.md)). The
+rendered through WebGL2 at the game's existing Canvas actor slots. A figure the
+model was drawing when it died stays the model as a corpse, player and enemy
+alike: it goes down through the falls authored in Blender and lies in the 2D
+corpse's pose and proportions until it is stamped into the ground
+([Death falls](death-falls.md)). Figures the native painter drew keep native
+corpses. The NM-0 regulars wear the `nm0_insignia` mesh (NMO back patch and
+chest crest) on the torso. The
 overhead framing, world ordering, controls, simulation, saves, and
 OpenProcessing entry point remain in place.
 `Player3D.enabled = false` selects the complete native player painter for
@@ -153,8 +156,8 @@ mounted actors, neutral/friendly people, civilians, and specialist/nonhuman
 units. Enemy crouching and ordinary cover can use the mesh. The normal
 renderer fallback remains available. No enemy death, injury, AI, projectile,
 or hit-detection logic is replaced. A killed enemy that the mesh was drawing
-falls on the mesh (`tools/player3d/fall.js`) and then hands over to its native
-corpse painter ([Death falls](death-falls.md)).
+stays on the mesh as a corpse (`tools/player3d/fall.js`,
+[Death falls](death-falls.md)).
 
 See the [enemy pose comparison](previews/enemy3d-poses.png),
 [animation comparison](previews/enemy3d-motion.mp4), and

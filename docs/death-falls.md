@@ -4,8 +4,9 @@ A body used to reach the floor seven frames (about a ninth of a second) after
 the killing shot, and a figure drawn by the 3D model was swapped on that same
 frame for the flat 2D corpse painter, already partly lying down. Deaths now
 take a little under a second, timed by two falls authored in Blender, and a
-model-drawn figure goes down as the model: from the pose it was last drawn in
-to the same corpse it has always come to rest as.
+model-drawn figure stays the model from the shot to the stamp in the ground:
+it goes down from the pose it was last drawn in, through every death type, and
+lies in the same pose, proportions and blood the 2D corpse always had.
 
 Before (top of each pair) and after, every 4 frames at 60 Hz, real `draw()`
 frames in Stick City. The last column is the same corpse in both:
@@ -67,6 +68,60 @@ does not change how long the fall takes. A punch stun keeps its own buckle,
 and a death resumed from a stun or a leg injury starts at the age where the
 curve reaches the progress it already had (`figureFallAgeFor()`).
 
+## One system: the model from the shot to the stamp
+
+A corpse whose figure the model drew on the frame before it died keeps
+`c.model3D` (the captured living pose) and is drawn by the model for its whole
+life, then pressed into the ground with one model draw (`stampCorpse()` through
+`drawPlayer3DCorpse()`). There is no hand-over to the native painter on the
+floor. The player has always worked this way; enemies (`ENEMY3D_HUMAN_TYPES`)
+now do too. A figure the native painter was drawing at death (stunned,
+leg-injured, mounted, boxing, a citizen) keeps the native corpse, and without
+WebGL every corpse falls back to it.
+
+Every death type starts from the living pose:
+
+| death | how it goes down on the model |
+|---|---|
+| ordinary, headshot, face down (0, 1, 6, 7, 8, 9) | the Blender fall below |
+| shotgun separation headshot (4) and 2 | the same fall: a model-drawn body has no frozen 2D frames to keep (`legacyOverkillFall()` still holds for native bodies) |
+| shotgun slice and breakup (gun overkill) | each thrown piece carries the living pose in its own drawing frame (`player3DFallLocalize()`) and lies down on the Blender clock while it flies (`player3DPieceFall()`); until it lands the torso is split along the spine at the cut (`player3DPieceShorten()`), because a flat cut cannot divide a standing body; the flat cut takes over once it lies |
+| explosive deaths (18, 19, 20) | the same per-piece fall |
+| sword decapitation and diagonal cut | the halves fall on the model; the sword's cut still divides them |
+| slump against a wall | the slump's own seat, relax and tip, blended from the living pose over its first 18 frames (`player3DSeatBlend()`) |
+
+The shotgun's close-range deaths, before (the model swapped for 2D pieces
+already lying) and after (each piece leaves from the standing pose):
+
+![Shotgun slice, breakup and separation headshot](previews/death-falls-shotgun.png)
+
+The rare dismemberments (lightning gibs, the melee and shockwave splits) are
+drawn on the model too, as pieces from their first frame, as the native
+painter drew them.
+
+What the native corpse painter drew, the model corpse carries:
+
+- **Proportions.** The sleeve, forearm and palm are the 2D rig's
+  (`projectFallRig()` at the corpse's progress, times `RAG_SCALE`): an upper
+  arm of 5.8 rather than the living mesh's 8.4 (4.4 on the narrower build), a
+  forearm of 5.2 rather than 6.7, a palm of 6.1 rather than 6.5. The fall thins
+  the living widths into them.
+- **The NM-0 regulars' insignia.** The circular NMO patch on the back and the
+  crest on the right chest are a Blender mesh (`nm0_insignia`) laid on the
+  torso loft, at the 2D painter's own sizes and positions, worn by
+  `NORMAL`, `NM0_ROOKIE` and `NM0_ROOKIE_F`, living and dead.
+- **Hair** on bare heads, through the fall and lying (`player3DCorpseHead()`).
+- **A closed face** once a body on its back is most of the way down: the
+  model's open eyes and brows take the skin colour and the native closed eyes
+  and nose are painted over (`player3DCorpseCloseEyes()`).
+- **A fallen hat** lands where the native painter laid it, in the colour it
+  was worn in; the dropped weapon falls from the hand to its native spot.
+- Wounds, the collar blood, the face-down pool and gibs as before.
+
+A body on its back now faces the sky: the 3D corpse frame had resolved a lying
+torso toward the floor, showing the back of the head with the jetpack on the
+chest.
+
 ## A model-drawn figure: the fall on the model
 
 `player3DFallCapture()` copies, at death, the pose the model drew on the
@@ -100,35 +155,34 @@ a hat that comes off rolls off the head to where the corpse lays it, bare
 heads keep their hair, and wounds ride the falling chest and head
 (`fatalWoundPoint()`).
 
-Once it has settled, the player keeps its 3D corpse (the same pose, so there
-is nothing to swap) and an enemy hands over to its native painter in a
-12-frame cross-fade on the floor (`PLAYER3D_FALL_FADE`). A body is not stamped
-into the ground until the hand-over is done.
-
-The corpse frame was also corrected: a body on its back now faces the sky. The
-3D corpse resolved a lying torso's frame toward the floor in both cases, so a
-face-up player corpse showed the back of its head with the jetpack lying on
-its chest.
+Once it has settled the body is that 3D corpse, the same pose, so there is
+nothing to swap.
 
 ## Cost
 
 A falling model costs about what the same figure cost alive a moment earlier,
-for under a second. Twelve model-drawn enemies shot on the same frame, real
-`draw()` in headless Chromium on SwiftShader (the GPU emulated on the CPU, so
-only the comparison means anything), median frame time:
+for under a second; a body lying on the floor is one model draw until it is
+stamped, then nothing. A volley that drops a dozen bodies at once would stamp
+them all on one frame, so model stamps take turns, `MODEL_STAMPS_PER_FRAME`
+(2) a frame, and a body waiting its turn is still the model.
 
-| | alive | falling | handing over | lying |
+Twelve model-drawn enemies shot on the same frame, real `draw()` in headless
+Chromium on SwiftShader (the GPU emulated on the CPU, so only the comparison
+means anything), median frame time:
+
+| | alive | falling | settling (the stamps) | lying |
 |---|---|---|---|---|
-| before | 12.2 / 13.1 ms | 8.4 / 8.6 ms | 4.8 / 4.0 ms | 4.2 / 5.1 ms |
-| after | 12.9 / 13.2 ms | 12.1 / 11.5 ms | 13.5 / 14.2 ms | 4.8 / 4.3 ms |
+| before (2D corpses) | 9.5 / 11.3 ms | 6.1 / 5.9 ms | 3.0 / 3.0 ms, worst 5.5 | 2.9 / 3.1 ms |
+| after (model corpses) | 9.5 / 9.3 ms | 9.8 / 9.0 ms | 4.6 / 5.6 ms, worst 13–24 | 3.5 / 3.5 ms |
 
-A body that has come to rest casts no shadow while it hands over, which keeps
-the cross-fade (both painters at once) to the living figures' cost.
+The worst settling frame is the first stamp creating a ground-blood canvas
+while a dozen bodies are still drawn; it has not been measured on a phone,
+where the model draws run on the GPU.
 
 ## Checks
 
 ```sh
-node tools/check-death-fall.js            # timing, start and end continuity, floor, hand-over, retirement
+node tools/check-death-fall.js            # timing, start/end continuity, floor, widths, pieces, slump, insignia, stamp budget
 node tools/check-falls-and-footwork.js    # the clock (asserts the Blender curve, not the old 0.15 a frame)
 node tools/check-corpse.js                # settle and freeze
 node tools/check-humanoid-corpse-standard.js

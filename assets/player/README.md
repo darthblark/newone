@@ -73,7 +73,15 @@ blender --background assets/player/player.blend --python tools/blender-falls.py 
 python3 tools/build-player3d.py
 ```
 
-See [Death falls](../../docs/death-falls.md).
+The portable GLBs carry both actions alongside the idle preview. See
+[Death falls](../../docs/death-falls.md).
+
+`nm0_insignia` is the NM-0 regulars' NMO back patch and right-chest crest, one
+mesh laid on the torso loft (`nm0_insignia_geometry()` in
+`tools/blender-player.py`) at the corpse painter's sizes, with blue and grey
+material groups. It rides the torso's own matrix at runtime and casts no ink or
+shadow. `--export-existing` creates a library mesh the exporter defines but the
+`.blend` lacks, and saves the file.
 
 ## Export manual edits
 

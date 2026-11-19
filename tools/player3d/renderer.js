@@ -537,6 +537,8 @@ void main() {
       const part=snapshot.parts[partIndex];
       const mesh=meshes[part.mesh];
       if(!mesh||!selected(part,options)||!validMatrix(part.matrix)) continue;
+      // A mark lying on another part's surface has no silhouette of its own.
+      if((ink||cast)&&part.noInk)continue;
       if(cast&&Number.isFinite(part.alpha)&&part.alpha<.5)continue;
       const matrix=cast?castMatrix(cast.matrix,part.matrix):part.matrix;
       const determinant=normalMatrix(matrix);if(!determinant)continue;

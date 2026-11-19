@@ -5,8 +5,8 @@
 // The fall starts in the living figure's last drawn pose, follows the timing
 // exported from the actions in assets/player/player.blend, and ENDS on the
 // corpse rig this game has always drawn -- player3DCorpseSkeleton(c) at
-// progress 1, the corpse's own archetype, springs and wounds. An enemy then
-// hands over to its native painter; the player keeps its 3D corpse.
+// progress 1, the corpse's own archetype, springs and wounds. The body stays
+// the model from there until it is stamped, enemy and player alike.
 const assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path');
 const { ctx, probe } = require('./harness');
@@ -48,7 +48,7 @@ function shoot(type, facing, hit, opts = {}) {
   probe(`frameCount++;corpses=[];window.e=new Character(${opts.x || 100},${opts.y || 100},${opts.player ? 'true' : 'false'},'${type}');
     e.aimAngle=${facing};e.moveAngle=${facing};e.isArmed=true;rememberFigureMotion(e,0,0);
     ${opts.noModel ? '' : `_player3DLiveSnapshots.set(e,Object.assign(player3DPose(e),{renderActorState:{frame:frameCount-1,x:e.x,y:e.y}}));`}
-    e.fallHit={frame:frameCount,kind:'BODY',weapon:WEAPONS.PISTOL,angle:${hit},force:3,mx:0,my:0,x:e.x,y:e.y,fatal:true};
+    e.fallHit={frame:frameCount,kind:'${opts.kind || 'BODY'}',weapon:WEAPONS.${opts.weapon || 'PISTOL'},angle:${hit},force:3,mx:0,my:0,x:e.x,y:e.y,fatal:true};
     window.livePose=_player3DLiveSnapshots.get(e);
     window.c=new Corpse(e.x,e.y,e.moveAngle,e.aimAngle,e.shirtCol,e.pantsCol,${opts.dT || 0},0,[],e.currentWeapon,${hit},e.eType,e.bodyW,e.bodyH,e);
     corpses.push(c);`);
@@ -86,11 +86,17 @@ for (const type of ['NM0_GREY_FATIGUE', 'NORMAL', 'FEMALE_PISTOL', 'BANDIT'])
     ok(`${tag}: comes to rest exactly on the corpse rig`, joints(fin).every((q, i) => dist(q, joints(rest)[i]) < 1e-6),
       Math.max(...joints(fin).map((q, i) => dist(q, joints(rest)[i]))).toExponential(2));
     ok(`${tag}: at rest the 2D painters are at progress 1`, P('c.fP') === 1 && P('c.rag.done'));
-    // Hand-over: the native painter takes the body before it can be stamped.
-    ok(`${tag}: an enemy hands over rather than retiring as a model`, P('player3DFallHandoff(c)') > .9 && !P('corpseSettled(c)'));
-    let fade = 0; while (P('player3DFallActive(c)') && fade < 40) { probe('frameCount++;c.update();'); fade++; }
-    ok(`${tag}: the hand-over lasts its fade`, fade === P('PLAYER3D_FALL_FADE') - 1, `${fade} more frames`);
-    ok(`${tag}: then the native painter owns it and it can retire`, !P('player3DFallActive(c)') && !P('c.id.isPlayer') && P('corpseSettled(c)'));
+    // One system: the model is the corpse from here to the stamp. There is
+    // no hand-over to the native painter on the floor.
+    ok(`${tag}: the fall is over and the body is still the model`, !P('player3DFallActive(c)') && !!P('c.model3D') && P('c.fall3D.finished'));
+    ok(`${tag}: and it can retire into the ground straight away`, P('corpseSettled(c)'));
+    // The corpse's sleeves, forearms and palms are the 2D rig's, not the
+    // living mesh's heavier ones.
+    const arms = P(`player3DCorpseSkeleton(c).arms.map(a=>[a.widths[0],a.foreWidth,a.handDiameter])`);
+    const want = P(`(()=>{const r=projectFallRig(c.bW,c.bH,1),k=RAG_SCALE,d=c.backFacing||c.fall.faceDown?.92:1,h=c.backFacing||c.fall.faceDown?.94:1;return [r.upperW*d*k,r.foreW*d*k,r.hand*h*k];})()`);
+    ok(`${tag}: the corpse's arms are the 2D corpse's widths`, arms.every(a => a.every((v, i) => Math.abs(v - want[i]) < 1e-6)), JSON.stringify(arms) + ' vs ' + JSON.stringify(want));
+    const blend = P(`player3DFallSkeleton(c).pose.arms.map(a=>[a.widths[0],a.foreWidth,a.handDiameter])`);
+    ok(`${tag}: and the fall ends on them`, blend.every((a, j) => a.every((v, i) => Math.abs(v - arms[j][i]) < 1e-6)));
   }
 
 // ---- the player keeps its model --------------------------------------------
@@ -100,7 +106,7 @@ probe('for(let i=0;i<120&&!c.fall.done;i++){frameCount++;c.update();}');
 const playerFall = P('player3DFallSkeleton(c).pose');
 probe('frameCount++;c.update();');
 // (Headless there is no WebGL, so the renderer's own readiness is not asked.)
-ok('player: no hand-over; the 3D corpse continues', !P('player3DFallActive(c)') && P('c.fall3D.finished') && P('c.id.isPlayer') && P('player3DFallHandoff(c)') === null);
+ok('player: the 3D corpse continues', !P('player3DFallActive(c)') && P('c.fall3D.finished') && P('c.id.isPlayer'));
 const playerRest = P('player3DCorpseSkeleton(c)');
 ok('player: the corpse pose it continues in is where the fall ended',
   joints(playerFall).every((q, i) => dist(q, joints(playerRest)[i]) < 1e-6));
@@ -116,6 +122,66 @@ ok('a stale model record is not a living pose', P('c.fall3D') === null);
 shoot('NORMAL', 0, Math.PI, { dT: 13 });
 ok('a death that comes apart keeps its own painter', P('c.fall3D') === null);
 
+// ---- every death a model-drawn body can die stays on the model -------------
+// A shotgun slice and breakup: each thrown piece starts as the living pose,
+// carried in its own drawing frame, and lies down while it flies.
+for (const dT of [2, 10]) {
+  shoot('NORMAL', 0, Math.PI, { dT, weapon: 'SHOTGUN' });
+  ok(`shotgun ${dT}: blown apart on the model`, !!P('c.model3D') && !!P('c.blast&&c.blast.mode') && P('c.blast.parts.every(q=>!!q.born)'));
+  const gap = P(`(()=>{let worst=0;const k=RAG_SCALE,lp=livePose.pose,t=livePose.parts.find(q=>q.part==='torso').matrix;
+    for(const q of c.blast.parts){const f=player3DPieceFall(c,q),b=q.born,co=Math.cos(b.rot),si=Math.sin(b.rot);
+      const back=v=>{const x=(v.x-q.pivot.x)*k,y=(v.y-q.pivot.y)*k;return {x:b.x+co*x-si*y,y:b.y+si*x+co*y,z:v.z*k};};
+      for(const [m,l] of [[f.pose.head,lp.head],[f.pose.pelvis,lp.pelvis],[f.pose.chest,{x:t[12],y:t[13],z:t[14]}]]){
+        const w=back(m);worst=Math.max(worst,Math.hypot(w.x-l.x,w.y-l.y,w.z-l.z));}}
+    return worst;})()`);
+  ok(`shotgun ${dT}: every piece leaves from the living pose`, gap < 1e-6, gap.toExponential(2));
+  probe('for(let i=0;i<70;i++){frameCount++;c.update();}');
+  ok(`shotgun ${dT}: and lies as the 2D pieces do once down`, P('c.blast.parts.every(q=>player3DPieceFall(c,q)===null)'));
+}
+// The shotgun's separation headshot, a 4, had no fall of its own; on the
+// model it gets one rather than appearing on the floor.
+shoot('NORMAL', 0, Math.PI, { dT: 4, weapon: 'SHOTGUN', kind: 'HEAD' });
+ok('shotgun headshot 4: falls on the Blender clock on the model', !!P('c.fall3D') && P('c.fall.curve') === 'BACKWARD');
+shoot('NORMAL', 0, Math.PI, { dT: 4, weapon: 'SHOTGUN', kind: 'HEAD', noModel: true });
+ok('shotgun headshot 4: a native body keeps its legacy frames', P('c.fall') === null);
+// A sword kill swaps src for a copy; the capture still finds the actor.
+shoot('NORMAL', 0, Math.PI, { dT: 16 });
+ok('sword kill: the halves fall on the model', !!P('c.sword') && !!P('c.fall3D'));
+// A wall slump starts where the figure stood and is the slump's own after.
+shoot('NORMAL', 0, Math.PI);
+probe(`window.seat={head:{x:5,y:1,z:20},chest:{x:4,y:0,z:14},pelvis:{x:3,y:0,z:6},forward:{x:1,y:0,z:0},
+  arms:[0,1].map(i=>({shoulder:{x:3,y:i?6:-6,z:16},elbow:{x:6,y:i?9:-9,z:10},fist:{x:9,y:i?9:-9,z:6}})),
+  legs:[0,1].map(i=>({hip:{x:3,y:i?4:-4,z:6},knee:{x:9,y:i?5:-5,z:4},ankle:{x:16,y:i?5:-5,z:1}})),torsoWidth:9,torsoDepth:3,headRadius:4.4};
+  c.wallSit={age:0};`);
+ok('wall slump: frame 0 is the living pose', dist(P('player3DSeatBlend(c,seat).head'), P('c.model3D.head')) < 1e-9);
+probe('c.wallSit.age=PLAYER3D_SLUMP_BLEND;');
+ok('wall slump: after the blend it is the slump', P('player3DSeatBlend(c,seat)===seat'));
+probe('c.wallSit=null;');
+
+// ---- the NM-0 regular's insignia -------------------------------------------
+const marks = P(`['NORMAL','NM0_ROOKIE','FEMALE_PISTOL','NM0_GREY_FATIGUE'].map(t=>{const e=new Character(0,0,false,t);e.aimAngle=.4;
+  const s=player3DPose(e),m=s.parts.find(q=>q.part==='nm0_insignia'),t2=s.parts.find(q=>q.part==='torso');
+  return [t,!!m,!!m&&m.noInk&&Array.from(m.matrix).every((v,i)=>v===t2.matrix[i])];})`);
+ok('the yellow and blue regulars wear the NMO patch and crest on the torso', marks.filter(m => m[0] === 'NORMAL' || m[0] === 'NM0_ROOKIE').every(m => m[1] && m[2]));
+ok('nobody else does', marks.filter(m => m[0] !== 'NORMAL' && m[0] !== 'NM0_ROOKIE').every(m => !m[1]));
+ok('the player does not', !P(`player3DPose(player).parts.some(q=>q.part==='nm0_insignia')`));
+shoot('NORMAL', 0, 0);
+probe('finishFigureFall(c);');
+ok('a fallen regular keeps them', P(`player3DCorpsePose(c).parts.some(q=>q.part==='nm0_insignia')`));
+
+// ---- a volley's bodies are stamped a couple at a time -----------------------
+probe(`corpses=[];for(let i=0;i<6;i++){frameCount++;window.e=new Character(100+i*40,100,false,'NORMAL');e.aimAngle=0;rememberFigureMotion(e,0,0);
+  _player3DLiveSnapshots.set(e,Object.assign(player3DPose(e),{renderActorState:{frame:frameCount-1,x:e.x,y:e.y}}));
+  e.fallHit={frame:frameCount,kind:'BODY',weapon:WEAPONS.PISTOL,angle:Math.PI,force:3,mx:0,my:0};
+  const k=new Corpse(e.x,e.y,0,0,e.shirtCol,e.pantsCol,0,0,[],e.currentWeapon,Math.PI,e.eType,e.bodyW,e.bodyH,e);finishFigureFall(k);
+  k.bloodTimer=k.smokeTimer=0;k.bT=0;if(k.fatalSpray)k.fatalSpray.left=0;if(k.rag)while(!k.rag.done)ragStep(k.rag);corpses.push(k);}
+  window.__stamped=0;window.__stamp=stampCorpse;stampCorpse=k=>{__stamped++;};`);
+const before = P('corpses.length');
+probe('frameCount++;updateCorpses();');
+ok('a volley stamps at most MODEL_STAMPS_PER_FRAME bodies a frame', P('__stamped') === P('MODEL_STAMPS_PER_FRAME') && P('corpses.length') === before - P('MODEL_STAMPS_PER_FRAME'));
+probe('for(let i=0;i<4;i++){frameCount++;updateCorpses();}stampCorpse=__stamp;');
+ok('and the rest follow on the next frames', P('corpses.length') === 0 && P('__stamped') === before);
+
 // ---- wounds ride the falling body -----------------------------------------
 shoot('NORMAL', 0, Math.PI);
 probe('for(let i=0;i<18;i++){frameCount++;c.update();}');
@@ -124,4 +190,4 @@ ok('a chest wound sits on the falling chest', Math.hypot(wound.x - P('c.x') - ch
 probe('finishFigureFall(c);');
 ok('finishing a fall (off screen, level change) finishes the model too', !P('player3DFallActive(c)'));
 
-console.log(`${checks} death fall timing, start/end continuity, floor, hand-over and retirement checks passed`);
+console.log(`${checks} death fall timing, start/end continuity, floor, corpse widths and retirement checks passed`);

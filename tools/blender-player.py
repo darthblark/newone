@@ -38,9 +38,11 @@ PALETTE = {
     'nm0_heavy_helmet': [64/255,77/255,73/255], 'nm0_heavy_helmet_trim': [31/255,39/255,35/255],
     'nm0_heavy_cloth': [40/255,80/255,200/255], 'nm0_heavy_trousers': [30/255,30/255,30/255],
     'nm0_boots': [31/255,36/255,42/255], 'nm0_heavy_boots': [24/255,29/255,36/255],
+    'nm0_insignia_blue': [30/255,78/255,178/255], 'nm0_insignia_grey': [184/255,190/255,198/255],
 }
 MATERIALS = {}
 LIBRARY = {}
+ADDED = []
 SOURCE = []
 SOCKETS = {}
 NATIVE_WEAPONS = {}
@@ -257,6 +259,74 @@ def army_webbing_geometry():
     return geometry
 
 
+# The torso loft, as (along the spine, front/back radius, lateral radius).
+TORSO_RINGS=[(-1,.60,.60),(-.65,.85,.76),(.25,1,.90),(.72,.91,.76),(1,.60,.50)]
+
+
+def torso_surface(y,z,side,lift=.03):
+    """A point on the torso loft's front (+1) or back (-1), lifted off it."""
+    for (z0,a0,b0),(z1,a1,b1) in zip(TORSO_RINGS,TORSO_RINGS[1:]):
+        if z<=z1:break
+    u=max(0,min(1,(z-z0)/(z1-z0)));a=a0+(a1-a0)*u;b=b0+(b1-b0)*u
+    x=side*a*math.sqrt(max(0,1-(y/b)**2))
+    return (x*(1+lift),y*(1+lift),z)
+
+
+def nm0_insignia_geometry():
+    """The NM-0 regular's two cloth marks, laid on the torso surface.
+
+    The corpse painter draws them in a torso normalised to 30 along the spine
+    (+ toward the collar) by 20 across (+ the wearer's right): an 11.5 blue
+    disc with a grey rim and stroked NMO lettering in the middle of the back,
+    and a 3.5 blue crest with a grey bar at (7, 4.5) on the chest. The same
+    numbers place them here, so the model and the corpse agree. The runtime
+    gives this mesh the torso's own matrix: unit z is half the spine, unit y
+    half the width, and +y is the wearer's right in the game's overhead frame.
+    """
+    g=Geometry()
+    def to_mesh(xn,yn,side,lift):return torso_surface(yn/10,xn/15,side,lift)
+    def disc(cx,cy,r0,r1,side,material,lift,steps=36):
+        # A ring (or a filled disc when r0 is 0) in normalised torso units.
+        inner=[to_mesh(cx+math.cos(t)*r0,cy+math.sin(t)*r0,side,lift) for t in (k*math.tau/steps for k in range(steps))]
+        outer=[to_mesh(cx+math.cos(t)*r1,cy+math.sin(t)*r1,side,lift) for t in (k*math.tau/steps for k in range(steps))]
+        if r0<=0:
+            vertices=[to_mesh(cx,cy,side,lift)]+outer
+            faces=[(0,1+k,1+(k+1)%steps) for k in range(steps)]
+        else:
+            vertices=inner+outer
+            faces=[(k,(k+1)%steps,steps+(k+1)%steps,steps+k) for k in range(steps)]
+        if side>0:faces=[tuple(reversed(f)) for f in faces]
+        g.add(vertices,faces,material)
+    def stroke(points,width,side,material,lift):
+        # A stroked polyline in normalised units, as the painter's line().
+        for (x0,y0),(x1,y1) in zip(points,points[1:]):
+            dx,dy=x1-x0,y1-y0;n=math.hypot(dx,dy) or 1;nx,ny=-dy/n*width*.5,dx/n*width*.5
+            ex,ey=dx/n*width*.5,dy/n*width*.5
+            quad=[(x0-ex+nx,y0-ey+ny),(x1+ex+nx,y1+ey+ny),(x1+ex-nx,y1+ey-ny),(x0-ex-nx,y0-ey-ny)]
+            vertices=[to_mesh(x,y,side,lift) for x,y in quad]
+            face=(0,1,2,3)
+            # Keep every face outward whatever the stroke's direction.
+            a,b,c=(Vector(v) for v in vertices[:3]);normal=(b-a).cross(c-a)
+            if normal.x*side<0:face=(3,2,1,0)
+            g.add(vertices,[face],material)
+    # Back patch: disc, rim, lettering. Letters are written across the body
+    # (the painter rotates them a quarter turn): u runs to the wearer's right,
+    # v toward the waist, so the normalised point is (-v, u).
+    disc(0,0,0,5.475,-1,'nm0_insignia_blue',.030)
+    disc(0,0,5.475,6.025,-1,'nm0_insignia_grey',.031)
+    letter=lambda pts:[(-v,u) for u,v in pts]
+    for pts in [[(-4,-1.7),(-4,1.7)],[(-4,-1.7),(-1.9,1.7)],[(-1.9,1.7),(-1.9,-1.7)],
+                [(-.9,1.7),(-.9,-1.7)],[(-.9,-1.7),(.1,.3)],[(.1,.3),(1.1,-1.7)],[(1.1,-1.7),(1.1,1.7)]]:
+        stroke(letter(pts),.65,-1,'nm0_insignia_grey',.034)
+    ring=[(3+math.cos(k*math.tau/20)*1.1,math.sin(k*math.tau/20)*1.7) for k in range(21)]
+    stroke(letter(ring),.65,-1,'nm0_insignia_grey',.034)
+    # Chest crest: a small blue disc, grey rim and a grey bar along the spine.
+    disc(7,4.5,0,1.475,1,'nm0_insignia_blue',.030,20)
+    disc(7,4.5,1.475,2.025,1,'nm0_insignia_grey',.031,20)
+    stroke([(6.2,4.5),(7.8,4.5)],.7,1,'nm0_insignia_grey',.034)
+    return g
+
+
 def army_platecarrier_geometry():
     """One heavy kit with chamfered plates, broad straps and magazine pouches."""
     geometry=Geometry().loft([(-.80,.72,.76),(-.59,.91,.94),(.42,.96,.98),(.83,.65,.72)],
@@ -273,7 +343,7 @@ def army_platecarrier_geometry():
     return geometry
 
 
-def make_library(collection):
+def make_library(collection,only_missing=False):
     geometries={}
     # A round, featureless silhouette in every view, including fallen bodies.
     # Facial marks stay on the surface; ears and the projecting nose formerly
@@ -316,6 +386,7 @@ def make_library(collection):
     geometries['vest']=Geometry().loft([(-.80,.71,.77),(-.55,.91,.88),(.65,1.03,.94),(.85,.73,.63)],'armor','Z',16)
     geometries['army_webbing']=army_webbing_geometry()
     geometries['army_platecarrier']=army_platecarrier_geometry()
+    geometries['nm0_insignia']=nm0_insignia_geometry()
     geometries['coat']=Geometry().loft([(-1.55,.89,1.0),(-.5,.78,.83),(.65,1,.89),(1,.60,.51)],'white','Z',16)
     g=Geometry().box((0,0,0),(.55,1,.80),'metal')
     for side in [-1,1]:
@@ -394,9 +465,11 @@ def make_library(collection):
                 grip_x={'bow':0,'sword':-.33,'pickaxe':-.25,'shovel':-.25,'cannon':-.35,'rocket':-.04,'revolver':-.29}.get(name,-.17 if name in ['pistol','smg','taser'] else -.10)
                 SOCKETS[name]={'grip':[round((grip_x-center)/span,6),0,0],'muzzle':[.5,0,0]}
             geometry.vertices=[((x-center)/span,y/span,z/span) for x,y,z in geometry.vertices]
+        if only_missing and name in LIBRARY:continue
         obj=mesh_object(name,geometry,collection);obj.hide_render=True;obj.hide_viewport=True
         obj['runtimeSockets']=json.dumps(SOCKETS.get(name,{}))
         LIBRARY[name]=obj
+        if only_missing:ADDED.append(name)
 
 
 def source_part(name,semantic,center,scale=(1,1,1),direction=None,bone=None,material_override=None,visible=True,collection=None):
@@ -774,6 +847,9 @@ def main():
         library=bpy.data.collections.get('Runtime mesh library')
         if not library:raise RuntimeError('--export-existing requires the existing assets/player/player.blend to be loaded')
         LIBRARY.update({obj.name:obj for obj in library.objects if obj.type=='MESH'})
+        # A runtime part added to the exporter since the .blend was built is
+        # created in its library, rather than requiring a full rebuild.
+        make_library(library,only_missing=True)
         SOURCE.extend(obj for obj in bpy.data.objects if obj.type=='MESH' and 'semantic' in obj)
         rig=bpy.data.objects.get('PlayerRig')
         if not rig:raise RuntimeError('PlayerRig is missing from the editable source')
@@ -781,6 +857,9 @@ def main():
             validate_scene(rig);export_soldier_variants(rig,not args.skip_renders)
             print('SOLDIER_VARIANTS_READY',str(OUT));return
         sync_source_edits();validate_scene(rig);export_compact();export_glb(rig);export_helmet_variant(rig);export_soldier_variants(rig,not args.skip_renders)
+        if ADDED:
+            bpy.context.preferences.filepaths.save_version=0
+            bpy.ops.wm.save_mainfile();print('PLAYER_LIBRARY_ADDED',','.join(ADDED))
         if not args.skip_renders:
             scene=bpy.context.scene;scene.render.filepath=str(OUT/'player-three-quarter.png');bpy.ops.render.render(write_still=True)
             render_headwear_previews()

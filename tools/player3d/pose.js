@@ -496,9 +496,11 @@ function player3DPose(actor, options = {}) {
       const sleeve=arm.widths?arm.widths[0]:R.upperW;
       bone('upper_arm',shoulder,mix(shoulder,elbow,.38),sleeve*1.16,[100,104,112],'armor_shoulder_'+tag,sleeve*1.08);
     }
-    bone('forearm',elbow,hand,R.foreW*(arm.widths?arm.widths[0]/R.upperW:1),palette.shirt,'forearm_'+tag);
+    bone('forearm',elbow,hand,Number.isFinite(arm.foreWidth)?arm.foreWidth:R.foreW*(arm.widths?arm.widths[0]/R.upperW:1),palette.shirt,'forearm_'+tag);
     if(assetMeshes&&assetMeshes.joint&&!options.skeleton)oval('joint',elbow,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,palette.shirt,'upper_arm_'+tag,M.postureFrame(0));
     if(nativeFrames)fittedOval('hand',hand,(arm.handDiameter||R.hand)*widthScale,(arm.handDiameter||R.hand)*widthScale,R.hand*.42*widthScale,chemist&&side<0?[177,184,194]:palette.skin,'hand_'+tag,M.postureFrame(p.chestHeading),p.chestHeading);
+    // A corpse's hand is the 2D rig's palm (its tip, .86 as wide as long).
+    else if(Number.isFinite(arm.handDiameter))oval('hand',hand,arm.handDiameter*.5*widthScale,arm.handDiameter*.43*widthScale,arm.handDiameter*.42*widthScale,chemist&&side<0?[177,184,194]:palette.skin,'hand_'+tag);
     else oval('hand',hand,R.hand*.43*widthScale,R.hand*.43*widthScale,R.hand*.42*widthScale,chemist&&side<0?[177,184,194]:palette.skin,'hand_'+tag);
   });
   legs.forEach((leg,i)=>{
@@ -724,6 +726,16 @@ function player3DPose(actor, options = {}) {
       const muzzle=sockets.leftMuzzle,axis=M.norm(sub(muzzle,hand)),center=mix(hand,muzzle,.4);
       addPart('cannon',[149,159,173],M.segment(sub(center,mul(axis,4)),add(center,mul(axis,4)),6,6),'cannon');
     } else if(typeof isCooking!=='undefined'&&isCooking)oval(chemist?'flask':'grenade',add(hand,point(0,0,2)),4,4,5,chemist?[127,192,223]:[66,117,59],'held_grenade');
+  }
+  // The NM-0 regulars' cloth marks (the NMO patch on the back, the crest on
+  // the right chest) are one Blender mesh laid on the torso loft, so it takes
+  // the torso's own matrix: living fit, prone roll and corpse frame alike.
+  const nmoType=identity.eType||c.eType;
+  if(!options.skeleton&&!c.isPlayer&&!identity.isPlayer&&!(identity.isCharred||c.isCharred)&&
+     (nmoType==='NORMAL'||nmoType==='NM0_ROOKIE'||nmoType==='NM0_ROOKIE_F')&&
+     assetMeshes&&assetMeshes.nm0_insignia&&selected('nm0_insignia')) {
+    const torsoPart=parts.find(q=>q.part==='torso');
+    if(torsoPart)parts.push({mesh:'nm0_insignia',color:null,matrix:new Float32Array(torsoPart.matrix),part:'nm0_insignia',noInk:true});
   }
   // Resolve every wound from its anatomical attachment. The renderer raycasts
   // that part's actual mesh before drawing a depth-tested cap, so a moving hand

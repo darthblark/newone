@@ -39,7 +39,9 @@ function player3DTrimLiveCorpses(list,limit=8) {
 }
 
 function player3DCorpseReady(r, c) {
-  return !!(c && c.id && (c.id.isPlayer || typeof player3DFallActive === 'function' && player3DFallActive(c)) && r && r.drawingContext &&
+  // The player, and any body the model was drawing when it died: from the
+  // fall to the stamp it stays the model, every death type alike.
+  return !!(c && c.id && (c.id.isPlayer || c.model3D) && r && r.drawingContext &&
     typeof Player3D !== 'undefined' && Player3D.enabled !== false &&
     typeof player3DPose === 'function' && Player3D.ensure());
 }
@@ -122,7 +124,12 @@ function player3DCorpseSkeleton(c, options = {}) {
     // flexion retains a real height and self-occlusion in the depth buffer.
     const middleZ=arm?3.5+standing*14:3+Math.abs(Math.sin(bend*f))*rig.shin*.52+standing*5;
     const endZ=arm?3+standing*12:2+standing*1.5;
-    if(arm)pose.arms.push({shoulder:point(g.ox,g.oy,startZ),elbow:point(g.ex,g.ey,middleZ),fist:point(g.hx,g.hy,endZ)});
+    // The sleeve, forearm and palm are the 2D corpse's own: its fall rig
+    // narrows them as the body goes down, and a mesh at the living widths
+    // read as a heavier person than the one lying in the native painter.
+    const rs=typeof RAG_SCALE==='number'?RAG_SCALE:.8;
+    if(arm)pose.arms.push({shoulder:point(g.ox,g.oy,startZ),elbow:point(g.ex,g.ey,middleZ),fist:point(g.hx,g.hy,endZ),
+      widths:[g.w1*rs,(g.w1+g.w2)*.5*rs,g.w2*rs],foreWidth:g.w2*rs,handDiameter:(rig.hand||8)*(faceDown?.94:1)*rs});
     else pose.legs.push({hip:point(g.ox,g.oy,startZ),knee:point(g.ex,g.ey,middleZ),ankle:point(g.hx,g.hy,endZ),heading:yaw+Math.PI});
   }
   if(c.particleBeamDeath&&typeof particleBeamLegKick==='function'){
@@ -218,13 +225,21 @@ function player3DCorpseDamagedHead(r,c,snapshot) {
   }
 }
 
-// Where a hat that came off lies, beside the head it fell from.
-function player3DCorpseHatPart(c,head) {
+// Where a hat that came off lies, beside the head it fell from, in the
+// colour it was worn in. An enemy's lies where its native painter always
+// laid it, off the head in the corpse's own frame.
+function player3DCorpseHatPart(c,head,yaw) {
   if(!c.hatOff)return null;
   const hw=headwearOf(c.id);if(!hw||!headwearFalls(hw))return null;
   head=head||{x:0,y:0,z:0};
   const mesh=hw==='STETSON'?'cowboy_hat':hw==='HOOD'?'hood':'helmet';
-  const col=c.fall3D&&c.fall3D.hatColor?c.fall3D.hatColor.slice():player3DCorpseColour(c.id.hatCol,[103,78,46]);
+  const worn=c.model3D&&c.model3D.hatColor||c.fall3D&&c.fall3D.hatColor;
+  const col=worn?worn.slice():player3DCorpseColour(c.id.hatCol,[103,78,46]);
+  if(!c.id.isPlayer){
+    if(!Number.isFinite(yaw))yaw=c.fall?figureFallYaw(c.fall,c.rag):(c.aA||0)+(c.rag&&c.rag.ang||0);
+    const k=typeof RAG_SCALE==='number'?RAG_SCALE:.8,o=c.hatOff,co=Math.cos(yaw),si=Math.sin(yaw);
+    return player3DCorpsePrimitive(mesh,head.x+(co*o.x-si*o.y)*k,head.y+(si*o.x+co*o.y)*k,1.5,7,7,2.6,col,yaw+o.r,'fallen_headwear');
+  }
   return player3DCorpsePrimitive(mesh,head.x+c.hatOff.x*.8,head.y+c.hatOff.y*.8,1.5,7,7,2.6,col,c.hatOff.r,'fallen_headwear');
 }
 
@@ -261,7 +276,8 @@ function drawPlayer3DSeatedCorpse(r,c) {
     arms:l.shoulders.map((q,i)=>({shoulder:point(q),elbow:point(l.elbows[i]),fist:point(l.hands[i])})),
     legs:l.hips.map((q,i)=>({hip:point(q),knee:point(l.knees[i]),ankle:point(l.heels[i])})),
     torsoWidth:c.bH*.35,torsoDepth:3.5*sc,headRadius:5.5*sc};
-  const snapshot=player3DPose(player3DCorpseProxy(c),{identity:player3DCorpseIdentity(c),pose,weapon:false});
+  const blended=typeof player3DSeatBlend==='function'?player3DSeatBlend(c,pose):pose;
+  const snapshot=player3DPose(player3DCorpseProxy(c),{identity:player3DCorpseIdentity(c),pose:blended,weapon:false});
   snapshot.worldOrigin=player3DCorpseWorldOrigin(c);
   if(c.dT===9||c.dT===4)snapshot.parts=snapshot.parts.filter(p=>!player3DCorpsePartIs(p,'head'));
   r.push();r.translate(c.x,c.y);
@@ -338,7 +354,14 @@ function player3DCorpseHalfClip(dc, plane, side, draw) {
 function drawPlayer3DBlastAnatomy(r,c,p) {
   if(!player3DCorpseReady(r,c))return false;
   const b=c.blast,scale=1,rig=b.rig;
-  let s=player3DCorpsePose(c,{progress:1,rig,scale,angle:0});
+  // A model-drawn body's pieces leave the living pose and lie down in flight.
+  const fall=c.model3D&&typeof player3DPieceFall==='function'?player3DPieceFall(c,p):null;
+  let s;
+  if(fall){
+    s=player3DPose(player3DCorpseProxy(c),{identity:player3DCorpseIdentity(c),pose:fall.pose,weapon:false,
+      widthScale:1/(typeof RAG_SCALE==='number'?RAG_SCALE:.8)});
+    s.worldOrigin=player3DCorpseWorldOrigin(c);
+  }else s=player3DCorpsePose(c,{progress:1,rig,scale,angle:0});
   const leg=b.legIndex===1?'rightLeg':'leftLeg';
   if(p.type==='leg')s=player3DCorpseFilter(s,q=>player3DCorpsePartIs(q,leg));
   else if(p.type==='gunArm')s=player3DCorpseFilter(s,q=>player3DCorpsePartIs(q,p.limb===1?'rightArm':'leftArm'));
@@ -351,9 +374,16 @@ function drawPlayer3DBlastAnatomy(r,c,p) {
     const arm=b.beamSide<0?'leftArm':'rightArm';
     s=player3DCorpseFilter(s,q=>p.side<0?player3DCorpsePartIs(q,arm):!player3DCorpsePartIs(q,arm));
   }
-  if(b.mode&&p.type!=='gunArm')player3DCorpseHalfClip(r.drawingContext,blastCutPlane(c,p),p.side,()=>player3DCorpseRender(r,s));
-  else player3DCorpseRender(r,s);
-  drawBlastCut(r,c,p);return true;
+  const previousView=_player3DCorpseView;
+  if(fall&&typeof drawingContext!=='undefined'&&r.drawingContext===drawingContext)_player3DCorpseView={view:true};
+  try{
+    if(b.mode&&p.type!=='gunArm'&&fall)player3DCorpseRender(r,player3DPieceShorten(s,c,p));
+    else if(b.mode&&p.type!=='gunArm')player3DCorpseHalfClip(r.drawingContext,blastCutPlane(c,p),p.side,()=>player3DCorpseRender(r,s));
+    else player3DCorpseRender(r,s);
+  }finally{_player3DCorpseView=previousView;}
+  // The painted cut lies across the lying body; a standing one has none yet.
+  if(!fall)drawBlastCut(r,c,p);
+  return true;
 }
 
 function drawPlayer3DBlastGibs(r,c) {
@@ -385,7 +415,7 @@ function drawPlayer3DFallLimb(r,rig,rg,i,f,shirt,pants,skin,boot,faceDown,id) {
 }
 
 function drawPlayer3DCorpse(r,c) {
-  if(c._fall3DUnder||!player3DCorpseReady(r,c))return false;
+  if(!player3DCorpseReady(r,c))return false;
   const previousOrigin=_player3DCorpseOrigin;
   _player3DCorpseOrigin=player3DCorpseWorldOrigin(c);
   try {
@@ -418,14 +448,7 @@ function drawPlayer3DCorpse(r,c) {
   if(c.hatOff&&!falling)snapshot=player3DCorpseFilter(snapshot,p=>p.part!=='headwear'&&p.part!=='helmet');
   if(c.swordHeadless||c.dT===4||c.dT===9)snapshot=player3DCorpseFilter(snapshot,p=>!player3DCorpsePartIs(p,'head'));
   if(c._drawWallOverlay)snapshot=player3DCorpseFilter(snapshot,p=>!player3DCorpsePartIs(p,'legs'));
-  const handoff=falling?player3DFallHandoff(c):null;
-  if(handoff!==null){
-    // An enemy's model lies down on its native corpse and fades into it.
-    c._fall3DUnder=true;try{c.paint(r);}finally{c._fall3DUnder=false;}
-    if(!(handoff>0))return true;
-  }
-  const ctx=r.drawingContext,alpha=ctx.globalAlpha;
-  if(falling)ctx.globalAlpha=alpha*(handoff===null?1:handoff);
+  player3DCorpseCloseEyes(c,snapshot);
   r.push();r.translate(c.x,c.y);
   try{
     if(falling)_player3DCorpseView=player3DFallRenderOptions(r,c,snapshot);
@@ -444,12 +467,11 @@ function drawPlayer3DCorpse(r,c) {
       }else player3DCorpseRender(r,snapshot);
       if(c.dT===4||c.dT===9){const head=snapshot.sockets.head;
         if(head)player3DCorpseRender(r,player3DCorpseSnapshot([player3DCorpsePrimitive('head',head.x,head.y,head.z-2,5,4.8,1.3,[90,0,0],0,'neck_cut')]));}
-      if(falling)player3DFallHair(r,c,snapshot);
-      else player3DCorpseHeadwear(r,c,snapshot);
+      if(!falling)player3DCorpseHeadwear(r,c,snapshot);
+      player3DCorpseHead(r,c,snapshot,falling);
     }
-  }finally{r.pop();ctx.globalAlpha=alpha;_player3DCorpseView=null;}
-  // Handing over, the native painter underneath already carries the blood.
-  if(handoff===null){player3DCorpseSpray(r,c,snapshot);player3DCorpseDecals(r,c);}
+  }finally{r.pop();_player3DCorpseView=null;}
+  player3DCorpseSpray(r,c,snapshot);player3DCorpseDecals(r,c);
   return true;
   } finally { _player3DCorpseOrigin=previousOrigin; }
 }
