@@ -14,9 +14,11 @@ uniform vec2 uDepth;
 uniform vec4 uView;
 uniform float uOutline;
 out vec3 vNormal;
+out vec3 vPos;
 void main() {
   vec3 n = normalize(uNormal * aNormal);
   vec3 p = (uModel * vec4(aPosition, 1.0)).xyz + n * uOutline;
+  vPos = p;
   float h = (p.z-uView.w)*uView.z;
   float w = 1.0-h;
   vec2 numerator = p.xy+uView.xy*h;
@@ -37,14 +39,88 @@ uniform vec2 uThresholds;
 uniform float uShadeContrast;
 uniform float uInk;
 uniform float uAlpha;
+uniform vec3 uTint;
+// Building shadows, tested per fragment. Each box is a footprint in the
+// actor's own frame with a roof height in model units; uShadeDir walks from
+// a ground point toward the sun (xy a unit step along the ground, z the
+// height the ray gains over that step). A ground point is shaded when its ray
+// enters a box before it has climbed over the roof, which is exactly the
+// region the building's shadow is PAINTED on.
+//
+// THE TEST IS MADE WHERE THE PIXEL LANDS ON THE GROUND, NOT AT THE HEIGHT OF
+// THE BODY PART IT SHOWS. It used to be the true 3D test, and the heights are
+// not a real scale: a figure casts as 21 units tall and a small office block
+// is 17 to 26, so a figure's head and shoulders -- all this camera ever sees
+// of it -- were "above" most shadows in the city and it stood fully lit in the
+// middle of them. A figure is not leaned, so each of its pixels is drawn on
+// the ground it stands on, and what reads right from above is the old rule:
+// the part of the figure over the painted shadow is the part that is dark.
+// uShadeGround = 1 is the cast pass, which drops the part of a figure's own
+// shadow that lands inside a building's instead of tinting it.
+uniform vec4 uView;
+uniform vec4 uShadeBox[4];
+uniform float uShadeTop[4];
+uniform vec3 uShadeDir;
+uniform float uShadeSoft;
+uniform float uShadeGround;
+// Tree crowns. A crown is not a box standing on the ground: it is foliage
+// between two heights. Each is an ellipse (centre, radii) with the heights it
+// spans in uShadeSpan, already scaled so the same ray serves; a ground point
+// is under it when its ray toward the sun passes inside the ellipse anywhere
+// between those heights -- a segment against an ellipse. uShadeLeaf is how
+// dark a crown's shade is next to a wall's, because leaves let light through.
+uniform vec4 uShadeDisc[6];
+uniform vec2 uShadeSpan[6];
+uniform float uShadeLeaf;
+in vec3 vPos;
 out vec4 oColor;
+float shadeAt(vec2 P) {
+  float s = 0.0;
+  vec2 inv = 1.0 / uShadeDir.xy;
+  vec2 across = vec2(-uShadeDir.y, uShadeDir.x);
+  float w = dot(P, across);
+  for (int i = 0; i < 4; i++) {
+    float tmax = uShadeTop[i] / uShadeDir.z;
+    if (tmax <= 0.0) continue;
+    vec4 b = uShadeBox[i];
+    vec2 a = (b.xy - P) * inv, c = (b.zw - P) * inv;
+    vec2 lo = min(a, c), hi = max(a, c);
+    float t0 = max(max(lo.x, lo.y), 0.0), t1 = min(min(hi.x, hi.y), tmax);
+    // Soft along the ray, and soft across it: how far inside the shadow's
+    // side edges this fragment sits.
+    vec2 mid = (b.xy + b.zw) * 0.5, half2 = (b.zw - b.xy) * 0.5;
+    float reach = abs(across.x) * half2.x + abs(across.y) * half2.y;
+    float side = (reach - abs(w - dot(mid, across))) / uShadeSoft + 0.5;
+    // Both ramps are centred on the painted edge, so the figure is half
+    // shaded exactly where the ground's own shadow stops.
+    s = max(s, clamp((t1 - t0) / uShadeSoft + 0.5, 0.0, 1.0) * clamp(side, 0.0, 1.0));
+  }
+  for (int i = 0; i < 6; i++) {
+    vec2 sp = uShadeSpan[i];
+    if (sp.y <= 0.0) continue;
+    vec4 d = uShadeDisc[i];
+    vec2 a = (P + uShadeDir.xy * (sp.x / uShadeDir.z) - d.xy) / d.zw;
+    vec2 b = (P + uShadeDir.xy * (sp.y / uShadeDir.z) - d.xy) / d.zw;
+    vec2 ab = b - a;
+    float t = clamp(-dot(a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    float r = length(a + ab * t);
+    s = max(s, clamp((1.0 - r) * min(d.z, d.w) / uShadeSoft + 0.5, 0.0, 1.0) * uShadeLeaf);
+  }
+  return s;
+}
 void main() {
+  // Where this fragment is drawn, back in the actor's ground frame: the same
+  // projection the vertex shader applies, so the edge of the shade on a
+  // figure runs straight on from the edge of the shadow on the road.
+  float vh = (vPos.z - uView.w) * uView.z;
+  float sh = shadeAt((vPos.xy + uView.xy * vh) / (1.0 - vh));
   float diffuse = dot(normalize(vNormal), uLight)*0.5+0.5;
   float shade = diffuse < uThresholds.x ? uBands.x :
     diffuse < uThresholds.y ? uBands.y : uBands.z;
   shade = mix(1.0, shade, uShadeContrast);
-  vec3 color = mix(uColor*shade, vec3(0.055,0.045,0.055), uInk);
-  oColor = vec4(color, uAlpha);
+  vec3 tint = mix(vec3(1.0), uTint, sh * (1.0 - uShadeGround));
+  vec3 color = mix(uColor*shade, vec3(0.055,0.045,0.055), uInk) * tint;
+  oColor = vec4(color, uAlpha * (1.0 - sh * uShadeGround));
 }`;
   const stats = { draws:0, meshUploads:0, triangles:0, gpuDrawCalls:0,
     contextLosses:0, contextRestores:0, resizes:0, failures:0,
@@ -75,6 +151,8 @@ void main() {
       failed=false;failure='';invalidatePipeline();return true;
     },
     projectPoint(snapshot,point,out){return Player3DView.project(point,snapshot&&snapshot.renderView,out);},
+    // [minX,minY,minZ,maxX,maxY,maxZ] of a posed snapshot, in its own frame.
+    measureSnapshot(snapshot){return ensure()&&measure(snapshot,emptyOptions)?Array.from(bounds):null;},
     get canvas(){return canvas;}, get gl(){return gl;},
     get failure(){return failure;}, get ready(){return !!program&&!lost&&!failed;},
     getDiagnostics(){return {enabled:api.enabled,ready:api.ready,failure,generation,
@@ -104,7 +182,8 @@ void main() {
     const slope=readLightTerm(()=>1/Math.max(.35,shadowLengthScale()*1.35),.8);
     const dx=typeof LIGHT_DX==='number'?LIGHT_DX:.6,dy=typeof LIGHT_DY==='number'?LIGHT_DY:.8;
     const sunLength=Math.hypot(dx,dy,slope)||1;
-    const sunWeight=.55*day*key*(1-.75*sky);
+    const fade=unitClamp(readLightTerm(()=>typeof sunFade==='function'?sunFade():1,1));
+    const sunWeight=.55*day*key*fade*(1-.75*sky);
     let x=-dx/sunLength*sunWeight,y=-dy/sunLength*sunWeight,z=slope/sunLength*sunWeight;
     let localWeight=0,n=0;
     const origin=snapshot&&snapshot.worldOrigin;
@@ -319,7 +398,7 @@ void main() {
       gl.linkProgram(program);gl.deleteShader(vertex);gl.deleteShader(fragment);
       if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program)||'Player shader link failed');
       stats.programCreates++;uniforms={};
-      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha'])
+      for(const name of ['uModel','uNormal','uBounds','uDepth','uView','uOutline','uLight','uColor','uBands','uThresholds','uShadeContrast','uInk','uAlpha','uTint','uShadeBox','uShadeTop','uShadeDir','uShadeSoft','uShadeGround','uShadeDisc','uShadeSpan','uShadeLeaf'])
         uniforms[name]=gl.getUniformLocation(program,name);
       pipeline.stage='initialization';
       for(const name of Object.keys(asset.meshes)) {
@@ -381,12 +460,29 @@ void main() {
     return determinant;
   }
 
+  // A CAST draws the same posed parts through one extra affine: every vertex
+  // dropped along the sun to the ground, or folded up a wall. It is the actor's
+  // real geometry in its real pose, so the shadow cannot disagree with the
+  // figure. Painted as one flat colour; the caller owns alpha and softness.
+  const castScratch=new Float32Array(16),noShadeTops=new Float32Array([-1e6,-1e6,-1e6,-1e6]);
+  const noShadeSpans=new Float32Array([0,-1e6,0,-1e6,0,-1e6,0,-1e6,0,-1e6,0,-1e6]);
+  function castMatrix(c,m) {
+    const o=castScratch;
+    for(let col=0;col<4;col++) {
+      const a=m[col*4],b=m[col*4+1],d=m[col*4+2],e=m[col*4+3];
+      o[col*4]=c[0]*a+c[4]*b+c[8]*d+c[12]*e;o[col*4+1]=c[1]*a+c[5]*b+c[9]*d+c[13]*e;
+      o[col*4+2]=c[2]*a+c[6]*b+c[10]*d+c[14]*e;o[col*4+3]=e;
+    }
+    return o;
+  }
   function measure(snapshot,options) {
     bounds[0]=bounds[1]=bounds[2]=Infinity;bounds[3]=bounds[4]=bounds[5]=-Infinity;
     let count=0;
+    const cast=options.cast;
     for(const part of snapshot.parts) {
-      const mesh=meshes[part.mesh],m=part.matrix;
-      if(!mesh||!selected(part,options)||!validMatrix(m)) continue;
+      const mesh=meshes[part.mesh];
+      if(!mesh||!selected(part,options)||!validMatrix(part.matrix)) continue;
+      const m=cast?castMatrix(cast.matrix,part.matrix):part.matrix;
       const b=mesh.box;
       for(let corner=0;corner<8;corner++) {
         const x=b[corner&1?3:0],y=b[corner&2?4:1],z=b[corner&4?5:2];
@@ -430,23 +526,27 @@ void main() {
   }
 
   function pass(snapshot,options,ink,outline) {
+    const cast=ink===2?options.cast:null;
+    if(cast){ink=0;color[0]=cast.color[0];color[1]=cast.color[1];color[2]=cast.color[2];gl.uniform3fv(uniforms.uColor,color);}
     gl.uniform1f(uniforms.uInk,ink);gl.uniform1f(uniforms.uOutline,outline);
     gl.cullFace(ink?gl.FRONT:gl.BACK);gl.depthMask(!ink);
-    const markParts=!ink&&snapshot.stains&&snapshot.stains.length;
+    const markParts=!cast&&!ink&&snapshot.stains&&snapshot.stains.length;
     if(markParts){gl.enable(gl.STENCIL_TEST);gl.stencilMask(255);gl.stencilOp(gl.KEEP,gl.KEEP,gl.REPLACE);}
     else gl.disable(gl.STENCIL_TEST);
     for(let partIndex=0;partIndex<snapshot.parts.length;partIndex++) {
       const part=snapshot.parts[partIndex];
-      const mesh=meshes[part.mesh],matrix=part.matrix;
-      if(!mesh||!selected(part,options)||!validMatrix(matrix)) continue;
+      const mesh=meshes[part.mesh];
+      if(!mesh||!selected(part,options)||!validMatrix(part.matrix)) continue;
+      if(cast&&Number.isFinite(part.alpha)&&part.alpha<.5)continue;
+      const matrix=cast?castMatrix(cast.matrix,part.matrix):part.matrix;
       const determinant=normalMatrix(matrix);if(!determinant)continue;
       if(markParts)gl.stencilFunc(gl.ALWAYS,partIndex%254+1,255);
       // The overhead projection flips Y. Mirrored part transforms flip it back.
       gl.frontFace(determinant<0?gl.CCW:gl.CW);
       gl.uniformMatrix4fv(uniforms.uModel,false,matrix);gl.uniformMatrix3fv(uniforms.uNormal,false,normal);
-      gl.uniform1f(uniforms.uAlpha,Number.isFinite(part.alpha)?Math.max(0,Math.min(1,part.alpha)):1);
+      gl.uniform1f(uniforms.uAlpha,cast?1:Number.isFinite(part.alpha)?Math.max(0,Math.min(1,part.alpha)):1);
       gl.bindVertexArray(mesh.vao);
-      if(ink) {gl.drawElements(gl.TRIANGLES,mesh.count,mesh.type,0);stats.gpuDrawCalls++;}
+      if(ink||cast) {gl.drawElements(gl.TRIANGLES,mesh.count,mesh.type,0);stats.gpuDrawCalls++;}
       else for(const group of mesh.groups) {
         groupColor(part,mesh,group);
         gl.drawElements(gl.TRIANGLES,group.count,mesh.type,group.start*mesh.bytes);stats.gpuDrawCalls++;
@@ -550,9 +650,45 @@ void main() {
       gl.uniform4f(uniforms.uBounds,x,y,1/w,1/h);
       gl.uniform2f(uniforms.uDepth,minZ,1/Math.max(.1,maxZ-minZ));
       gl.uniform4f(uniforms.uView,view.offsetX,view.offsetY,view.invH,view.pivotZ);
+      const cast=options.cast||null,shade=options.shade||null;
+      if(shade) {
+        gl.uniform3f(uniforms.uTint,shade.tint[0],shade.tint[1],shade.tint[2]);
+        gl.uniform4fv(uniforms.uShadeBox,shade.boxes);gl.uniform1fv(uniforms.uShadeTop,shade.tops);
+        gl.uniform3f(uniforms.uShadeDir,shade.dir[0],shade.dir[1],shade.dir[2]);
+        gl.uniform1f(uniforms.uShadeSoft,shade.soft);gl.uniform1f(uniforms.uShadeGround,cast?1:0);
+        if(shade.spans){gl.uniform4fv(uniforms.uShadeDisc,shade.discs);gl.uniform2fv(uniforms.uShadeSpan,shade.spans);
+          gl.uniform1f(uniforms.uShadeLeaf,shade.leaf);}
+        else gl.uniform2fv(uniforms.uShadeSpan,noShadeSpans);
+      } else {
+        gl.uniform3f(uniforms.uTint,1,1,1);gl.uniform1fv(uniforms.uShadeTop,noShadeTops);gl.uniform2fv(uniforms.uShadeSpan,noShadeSpans);
+        gl.uniform3f(uniforms.uShadeDir,1,1,1);gl.uniform1f(uniforms.uShadeSoft,1);gl.uniform1f(uniforms.uShadeGround,0);
+      }
       const light=sampleLighting(snapshot,transform,options.lighting);
       gl.uniform3fv(uniforms.uLight,light.direction);
-      gl.uniform1f(uniforms.uShadeContrast,light.contrast);
+      gl.uniform1f(uniforms.uShadeContrast,cast?0:light.contrast);
+      if(cast) {
+        pass(snapshot,options,2,0);gl.bindVertexArray(null);gl.depthMask(true);
+        if(pipeline.validation==='failed')return false;
+        // The stretch IS the penumbra, so it must be filtered whatever the
+        // sketch has set for sprites.
+        const smoothing=context.imageSmoothingEnabled,quality=context.imageSmoothingQuality;
+        context.imageSmoothingEnabled=true;context.imageSmoothingQuality='high';
+        // Four taps a texel apart, each at a quarter of the tone. The model is
+        // rasterised without multisampling, so one stretched copy keeps its
+        // stair-steps; four offset copies average them into a gradient, and
+        // composite back to exactly the caller's alpha where they overlap.
+        const full=context.globalAlpha,tap=1-Math.pow(1-Math.min(.98,full),.25);
+        const ox=w/pixelW*.85,oy=h/pixelH*.85;
+        context.globalAlpha=tap;
+        context.drawImage(canvas,0,0,pixelW,pixelH,x-ox,y-oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x+ox,y-oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x-ox,y+oy,w,h);
+        context.drawImage(canvas,0,0,pixelW,pixelH,x+ox,y+oy,w,h);
+        context.globalAlpha=full;
+        context.imageSmoothingEnabled=smoothing;if(quality)context.imageSmoothingQuality=quality;
+        stats.castDraws=(stats.castDraws||0)+1;
+        return true;
+      }
       const toon=source.toon||emptyOptions,bands=toon.bands||defaultBands,thresholds=toon.thresholds||defaultThresholds;
       gl.uniform3f(uniforms.uBands,bands[0],bands[1],bands[2]);
       gl.uniform2f(uniforms.uThresholds,thresholds[0],thresholds[1]);

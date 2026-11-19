@@ -15,7 +15,17 @@ const drop=(expr='0')=>probe(`window.c=new Corpse(e.x,e.y,e.moveAngle,e.aimAngle
 for(const a of [0,.7,Math.PI,-Math.PI/2]){
  probe(`window.e=new Character(0,0,false,'CITY_CITIZEN_M');e.aimAngle=-.2;e.isMoving=true;e.moveAngle=${a};rememberFigureMotion(e,Math.cos(${a})*4,Math.sin(${a})*4);`);drop();
  assert(Math.abs(P('Math.atan2(Math.sin(c.fall.a-('+a+')),Math.cos(c.fall.a-('+a+')))'))<1e-9);
- for(let i=1;i<=7;i++){probe('frameCount++;c.update();');assert(Math.abs(P('c.fP')-Math.min(1,i*.15))<1e-9,'original corpse fall speed changed');}
+ // The collapse runs on the Blender action's clock: its overhead extent,
+ // never shrinking, still well short of the floor after the old seven frames,
+ // and on the floor at the action's contact frame.
+ {const curve=P('c.fall.curve'),k=P('c.fall.tempo'),contact=P('c.fall.duration');
+  assert(curve===(P('c.fall.faceDown')?'FORWARD':'BACKWARD')&&k===1,'fall uses its Blender action');
+  let last=0;
+  for(let i=1;i<=Math.ceil(contact);i++){probe('frameCount++;c.update();');const f=P('c.fP');
+   assert(Math.abs(f-P(`Math.min(1,player3DFallSample(player3DFallCurve('${curve}'),'projected',${i*k}))`))<1e-9,'fall leaves the Blender curve');
+   assert(f>=last-1e-12,'fall progress reverses');last=f;
+   if(i===7)assert(f<.5,'corpse still collapses in a handful of frames');}
+  assert(P('c.fP')===1,'body not on the floor at the action\'s contact frame');}
  probe('for(let i=0;i<95;i++){frameCount++;c.update();}');assert(P('c.fP===1&&c.rag.done&&c.fall.done'));
  assert(P('Math.abs(c.rag.ang)<=.26'),'impact overrides locomotion through excessive spin');
  const frozen=P('[c.x,c.y,c.rag.t,c.fall.age,...c.rag.limbs.flatMap(l=>[l.a,l.b])]');

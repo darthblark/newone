@@ -2673,6 +2673,16 @@ that all four kinds plus both site states draw through both shadow passes.
 
 ## How a body comes to rest
 
+**Death falls are timed in Blender.** `Death_Fall_Backward`/`Death_Fall_Forward` on
+`PlayerRig` (`tools/blender-falls.py`) are sampled into `PLAYER3D_FALLS`; every humanoid
+death collapses on their `projected` channel (contact at frame 40/37, settled by 54), not
+the old seven frames. A figure the 3D model drew goes down as the model
+(`tools/player3d/fall.js`): from its last drawn pose to exactly
+`player3DCorpseSkeleton(c)` at progress 1, limbs paired by side, then the player keeps
+its 3D corpse and an enemy cross-fades to its native painter. Only timing comes from
+Blender, never the end pose. See [Death falls](docs/death-falls.md) and
+`tools/check-death-fall.js`.
+
 Every corpse used to land in one pose. The legs were two rects at fixed offsets, the arms
 two ellipses lerped between two constants, and the whole figure was rotated to face the
 way it died — so twenty bodies in a room were twenty copies of one drawing at twenty
@@ -2872,9 +2882,9 @@ could never reach zero:
 The clock is ticked in **one place** at the top of `Corpse.update()` now, and
 `corpseSettled(c)` asks per death type what is actually still moving — spurt (`bT`, only
 1/2/3/4/6), sliding pieces (`stopMotionTimer`, only 5/9/10/11/13/14/15), separation
-(`corpseSepMax`), the fall, the settle, bleed and smoke. An ordinary body retires in ~35
-frames instead of 156, because its pose froze at `RAG_FRAMES` and there was nothing left
-to draw.
+(`corpseSepMax`), the fall, the settle, bleed and smoke. An ordinary body retires once
+the Blender fall has settled (frame 54) instead of at 156, because its pose froze and there
+was nothing left to draw; a model-drawn enemy also waits out its 12-frame hand-over.
 
 **The ground remembers, per biome.** `legacyStartAtLevel()` used to call `clearAllBlood()`
 on entry, so the ground you soaked in Stick City was spotless again the moment you came
@@ -3770,6 +3780,7 @@ node tools/check-ballistics.js     # hostile rounds are always slower than the p
 node tools/check-menu.js           # travel lives in the pause menu, and nowhere else
 node tools/check-pathing.js        # walkers turn round obstacles; the collision index
 node tools/check-corpse.js         # the settle: variation, impact direction, and it freezes
+node tools/check-death-fall.js     # Blender-timed falls: living pose to the exact corpse rig, hand-over
 node tools/check-damage-feedback.js # what the player is told when hit, shield up vs down
 node tools/check-depth.js          # depth order, and how a mass projects
 node tools/check-lighting.js       # the deferred rig: uniforms resolve, nothing allocates per frame
@@ -3905,7 +3916,8 @@ owns sun shadows even with the WebGL rig active: `glRigOwnsSunShadows()` is
 false and `uSunCast` skips the march, so never add a second caster there. Ask
 `glRigActive()`, not `glRigOwnsSunShadows()`, when the question is whether the
 rig is running (the lamp haze budget in `drawNightLights()` got that wrong).
-Cel figures cast their real pose: `celFigureCast3D()` redraws the posed
+Cel figures cast their real pose (`celFigureCastSnapshot()` leaves out the vest and
+armor shells and pulls the pelvis in, so no kit reads as a backpack): `celFigureCast3D()` redraws the posed
 Player3D snapshot through a `cast` matrix (ground shear, or a per-face wall
 fold queued for `celFigureWallFlush()`), at low resolution with four offset
 taps for the soft edge. `celFigureModelCasts()` decides whether the model or

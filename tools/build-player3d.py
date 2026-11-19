@@ -20,14 +20,19 @@ def main():
     asset = json.loads((ROOT / 'assets/player/player-mesh.json').read_text())
     if asset.get('schemaVersion') != 1 or not asset.get('meshes'):
         raise SystemExit('Unsupported or empty player asset')
-    sources = ['view.js', 'pose.js', 'renderer.js', 'corpse.js']
+    falls = json.loads((ROOT / 'assets/player/player-falls.json').read_text())
+    if falls.get('schemaVersion') != 1 or not falls.get('falls'):
+        raise SystemExit('Unsupported or empty player fall asset')
+    sources = ['view.js', 'pose.js', 'renderer.js', 'fall.js', 'corpse.js']
     chunks = [BEGIN, '// Generated source; edit the Blender model/exporter and tools/player3d modules.',
-              'const PLAYER3D_ASSET = ' + json.dumps(asset, separators=(',', ':'), ensure_ascii=True) + ';']
+              'const PLAYER3D_ASSET = ' + json.dumps(asset, separators=(',', ':'), ensure_ascii=True) + ';',
+              '// Death fall timing from assets/player/player.blend (tools/blender-falls.py).',
+              'const PLAYER3D_FALLS = ' + json.dumps(falls, separators=(',', ':'), ensure_ascii=True) + ';']
     for source in sources:
         path = ROOT / 'tools/player3d' / source
         if path.exists():
             chunks.extend(['// Source: tools/player3d/' + source, path.read_text().rstrip()])
-        elif source != 'corpse.js':
+        elif source not in ('corpse.js', 'fall.js'):
             raise SystemExit('Missing runtime source: ' + str(path))
     chunks.append(END)
     block = '\n'.join(chunks) + '\n'

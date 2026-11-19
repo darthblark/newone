@@ -1,7 +1,7 @@
 # Editable 3D player
 
 `player.blend` contains the assembled, skinned player, an 18-bone armature,
-bone-attached grip/muzzle/equipment sockets, a breathing preview action, cel
+bone-attached grip/muzzle/equipment sockets, a breathing preview action, two death-fall actions, cel
 materials and hidden outfit/equipment variants. The default character is bald,
 with a red shirt, blue trousers and dark boots.
 
@@ -59,6 +59,21 @@ Validation runs during export. To validate an existing runtime asset:
 ```sh
 blender --background --factory-startup --python tools/blender-player.py -- --validate-only
 ```
+
+## Death falls
+
+`player.blend` also carries `Death_Fall_Backward` and `Death_Fall_Forward`,
+two keyframed actions on `PlayerRig` at the game's 60 Hz. The game reads their
+timing, sampled into `player-falls.json`; `player-falls-side.png` and
+`player-falls-top.png` are their contact sheets. To edit them, change the key
+poses in `tools/blender-falls.py` (or the F-curves in Blender) and run:
+
+```sh
+blender --background assets/player/player.blend --python tools/blender-falls.py -- --save
+python3 tools/build-player3d.py
+```
+
+See [Death falls](../../docs/death-falls.md).
 
 ## Export manual edits
 

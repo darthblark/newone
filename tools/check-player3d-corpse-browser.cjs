@@ -5,8 +5,8 @@ const root=path.resolve(__dirname,'..'),out=process.env.PLAYER3D_CORPSE_OUT||'/t
 const p5=fs.readFileSync('/workspace/.environment/newone/node_modules/p5/lib/p5.min.js','utf8');
 const begin='// BEGIN GENERATED PLAYER3D — tools/build-player3d.py';
 const base=fs.readFileSync(path.join(root,'game.js'),'utf8').split(begin)[0];
-const source=base+'\nconst PLAYER3D_ASSET='+fs.readFileSync(path.join(root,'assets/player/player-mesh.json'),'utf8')+';\n'+
- ['pose.js','renderer.js','corpse.js'].map(f=>fs.readFileSync(path.join(root,'tools/player3d',f),'utf8')).join('\n');
+const source=base+'\nconst PLAYER3D_ASSET='+fs.readFileSync(path.join(root,'assets/player/player-mesh.json'),'utf8')+';\nconst PLAYER3D_FALLS='+fs.readFileSync(path.join(root,'assets/player/player-falls.json'),'utf8')+';\n'+
+ ['view.js','pose.js','renderer.js','fall.js','corpse.js'].map(f=>fs.readFileSync(path.join(root,'tools/player3d',f),'utf8')).join('\n');
 const boot='preload=function(){};setup=function(){createCanvas(1260,900);pixelDensity(1);noLoop();window.__ready=true;};draw=function(){};windowResized=function(){};';
 async function main(){
  fs.mkdirSync(out,{recursive:true});
