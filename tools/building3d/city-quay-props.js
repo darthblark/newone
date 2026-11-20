@@ -122,6 +122,46 @@ const CityQuayProps3D = (() => {
       ctx.fillStyle=f.colorStyle;CityProjectedFaces.fill(ctx,f,target);stats.faces++;
     }}finally{ctx.restore();}stats.draws++;return true;
   }
+  // THE SHADOW IS THE SHAPE OF THE BUILDING, NOT OF ITS BOX.
+  //
+  // The shared pass hulls a footprint with its offset copy, which is right for
+  // a box and says nothing about what is on top of it. Every vertex here
+  // already carries a real height, so each one is dropped to the ground along
+  // the sun at its own height: a ridge throws a gable, a chimney throws a
+  // notch, a plant room steps the edge of a flat roof. That outline is the
+  // strongest statement of the roof's form this camera can make, because it
+  // is the only place the profile is seen from the side.
+  //
+  // A shadow lies on the ground, so its path is in WORLD space and does not
+  // depend on the camera at all. It is rebuilt only when the sun has moved a
+  // thirty-second of a unit per unit of height -- every few seconds of play --
+  // and is otherwise one cached fill per building. Each polygon is wound the
+  // same way before it joins the path, so the nonzero rule unions them and no
+  // overlap is ever filled twice.
+  function drawShadow(b,g,ox,oy,style) {
+    const p=plan(b),ctx=g&&(g.drawingContext||g);
+    if(!p||!ctx||typeof ctx.fill!=='function'||typeof Path2D!=='function')return false;
+    const qx=Math.round(ox*32)/32,qy=Math.round(oy*32)/32;
+    if(!p.shadowPath||p.shadowOx!==qx||p.shadowOy!==qy){
+      const path=new Path2D(),pts=[];
+      const add=n=>{
+        let area=0;
+        for(let i=0;i<n;i++){const j=(i+1)%n;area+=pts[i*2]*pts[j*2+1]-pts[j*2]*pts[i*2+1];}
+        if(Math.abs(area)<.5)return;
+        if(area>0){path.moveTo(pts[0],pts[1]);for(let i=1;i<n;i++)path.lineTo(pts[i*2],pts[i*2+1]);}
+        else{path.moveTo(pts[(n-1)*2],pts[(n-1)*2+1]);for(let i=n-2;i>=0;i--)path.lineTo(pts[i*2],pts[i*2+1]);}
+        path.closePath();
+      };
+      for(const f of p.faces){
+        if(f.kind==='facade')continue;
+        const n=f.points.length;
+        for(let i=0;i<n;i++){const v=f.points[i];pts[i*2]=v[0]+qx*v[2];pts[i*2+1]=v[1]+qy*v[2];}
+        add(n);
+      }
+      p.shadowPath=path;p.shadowOx=qx;p.shadowOy=qy;stats.shadowBuilds++;
+    }
+    ctx.fillStyle=style;ctx.fill(p.shadowPath);stats.shadowDraws++;return true;
+  }
   function paintHeight(g,b,wet=0) {
     const p=project(b),ctx=g&&(g.drawingContext||g);if(!p||!ctx||typeof ctx.fill!=='function')return false;
     const ground=typeof groundElev==='function'?groundElev(b.x,b.y):0,origin=typeof glRigHeightOrigin==='function'?glRigHeightOrigin():0,
