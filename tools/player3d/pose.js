@@ -483,6 +483,21 @@ function player3DPose(actor, options = {}) {
   // read as eggs, even when their standing XY footprint was fitted round.
   const headRadius=(nativeFrames?p.headProjectedDiameter*.5:Number(p.headRadius)||5.5)*PLAYER3D_HEAD_SCALE;
   oval('head',p.head,headRadius,headRadius,headRadius,palette.skin,'head',headBasis);
+  if(options.npc===true&&!c.isPlayer&&c.eType==='CITY_CITIZEN_M'&&!options.skeleton) {
+    const style=Math.max(0,Math.min(3,Number(identity.clothingStyle)||0));
+    const torso=parts.find(part=>part.part==='torso');
+    if(torso&&selected('civilian_clothing')&&assetMeshes&&assetMeshes['citizen_outfit_'+style]) {
+      const light=palette.shirt.map(v=>Math.min(255,v*.78+55));
+      const dark=palette.shirt.map(v=>v*.70);
+      addPart('citizen_outfit_'+style,hitFlash?flashColor:light,torso.matrix,'civilian_clothing');
+      parts[parts.length-1].materials={shirt:(hitFlash?flashColor:light).map(v=>v/255),
+        armor:(hitFlash?flashColor:dark).map(v=>v/255),white:(hitFlash?flashColor:[229,224,202]).map(v=>v/255)};
+    }
+    const hair=Math.max(0,Math.min(6,Number(identity.hairStyle)||0));
+    if(assetMeshes&&assetMeshes['citizen_hair_'+hair])
+      oval('citizen_hair_'+hair,p.head,headRadius,headRadius,headRadius,
+        M.color(identity.hairCol||c.hairCol,[32,27,26]),'civilian_hair',headBasis);
+  }
   const arms=p.arms||[],legs=p.legs||[];
   arms.forEach((arm,i)=>{
     const side=arm.side===-1||arm.side===1?arm.side:i?1:-1,tag=side<0?'left':'right';

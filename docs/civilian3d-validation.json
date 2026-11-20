@@ -1,0 +1,159 @@
+{
+  "rows": [
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_0",
+      "hair": "citizen_hair_0",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_1",
+      "hair": "citizen_hair_1",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_2",
+      "hair": "citizen_hair_2",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_3",
+      "hair": "citizen_hair_3",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_0",
+      "hair": "citizen_hair_4",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_1",
+      "hair": "citizen_hair_5",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_2",
+      "hair": "citizen_hair_6",
+      "aligned": true,
+      "modelShadow": true
+    },
+    {
+      "native": 0,
+      "draws": 1,
+      "unchanged": true,
+      "weapon": false,
+      "clothing": "citizen_outfit_3",
+      "hair": "citizen_hair_0",
+      "aligned": true,
+      "modelShadow": true
+    }
+  ],
+  "fallback": [
+    {
+      "name": "other civilian",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "armed",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "stun",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "injury",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "dead",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "prone",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "crouch",
+      "eligible": false,
+      "shadow": false
+    }
+  ],
+  "disabled": false,
+  "profiles": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "outfitPixels": [
+    29,
+    15,
+    55
+  ],
+  "casts": 13,
+  "gpuError": 0
+}
