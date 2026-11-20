@@ -83,12 +83,17 @@
   ],
   "fallback": [
     {
-      "name": "other civilian",
+      "name": "farmer",
       "eligible": false,
       "shadow": false
     },
     {
-      "name": "armed",
+      "name": "armed bystander",
+      "eligible": false,
+      "shadow": false
+    },
+    {
+      "name": "thug boxing",
       "eligible": false,
       "shadow": false
     },
@@ -154,6 +159,261 @@
     15,
     55
   ],
-  "casts": 13,
-  "gpuError": 0
+  "actions": [
+    {
+      "kind": "PHONE",
+      "phase": "REACH",
+      "fraction": 0,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "PHONE",
+      "phase": "REACH",
+      "fraction": 0.5,
+      "height": 21.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "PHONE",
+      "phase": "USE",
+      "fraction": 0.25,
+      "height": 30,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "PHONE",
+      "phase": "LOWER",
+      "fraction": 0.5,
+      "height": 21.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "PHONE",
+      "phase": "LOWER",
+      "fraction": 1,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "SMOKE",
+      "phase": "REACH",
+      "fraction": 0,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "SMOKE",
+      "phase": "REACH",
+      "fraction": 0.5,
+      "height": 20.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "SMOKE",
+      "phase": "USE",
+      "fraction": 0.25,
+      "height": 28,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "SMOKE",
+      "phase": "LOWER",
+      "fraction": 0.5,
+      "height": 20.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "SMOKE",
+      "phase": "LOWER",
+      "fraction": 1,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "BOTTLE",
+      "phase": "REACH",
+      "fraction": 0,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "BOTTLE",
+      "phase": "REACH",
+      "fraction": 0.5,
+      "height": 20.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "BOTTLE",
+      "phase": "USE",
+      "fraction": 0.25,
+      "height": 28,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "BOTTLE",
+      "phase": "LOWER",
+      "fraction": 0.5,
+      "height": 20.96,
+      "count": 1,
+      "grip": true,
+      "stable": true
+    },
+    {
+      "kind": "BOTTLE",
+      "phase": "LOWER",
+      "fraction": 1,
+      "height": 13.919999999999998,
+      "count": 0,
+      "grip": true,
+      "stable": true
+    }
+  ],
+  "switches": [
+    {
+      "pistol": false,
+      "smoke": true,
+      "aligned": true
+    },
+    {
+      "pistol": true,
+      "smoke": false,
+      "aligned": true
+    },
+    {
+      "pistol": true,
+      "smoke": false,
+      "aligned": true
+    },
+    {
+      "pistol": false,
+      "smoke": false,
+      "aligned": true
+    }
+  ],
+  "casts": 17,
+  "gpuError": 0,
+  "street": [
+    {
+      "type": "CITY_CITIZEN_F",
+      "draws": 1,
+      "garment": "city_blouse",
+      "held": [],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_NEUTRAL_M",
+      "draws": 1,
+      "garment": "city_work_vest",
+      "held": [],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_THUG_M",
+      "draws": 1,
+      "garment": "city_tracksuit",
+      "held": [],
+      "pistol": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_NEUTRAL_M",
+      "draws": 1,
+      "garment": "city_work_vest",
+      "held": [
+        "city_phone"
+      ],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_NEUTRAL_M",
+      "draws": 1,
+      "garment": "city_work_vest",
+      "held": [
+        "flask"
+      ],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_THUG_M",
+      "draws": 1,
+      "garment": "city_tracksuit",
+      "held": [
+        "city_cigarette"
+      ],
+      "pistol": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_CITIZEN_F",
+      "draws": 1,
+      "garment": "city_blouse",
+      "held": [],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_NEUTRAL_M",
+      "draws": 1,
+      "garment": "city_work_vest",
+      "held": [],
+      "pistol": false,
+      "projectile": false,
+      "casts": true,
+      "finite": true
+    },
+    {
+      "type": "CITY_THUG_M",
+      "draws": 1,
+      "garment": "city_tracksuit",
+      "held": [],
+      "pistol": true,
+      "projectile": true,
+      "casts": true,
+      "finite": true
+    }
+  ]
 }

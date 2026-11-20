@@ -26,7 +26,7 @@
       "preview": "nm0-armored-soldier.png"
     }
   ],
-  "meshCount": 48,
+  "meshCount": 54,
   "boneCount": 18,
   "runtimeMaterial": "Three-band world-lit shader; glTF retains palette and toon metadata, not Blender node execution.",
   "civilianVariants": [
@@ -36,6 +36,27 @@
       "outfits": 4,
       "hairstyles": 7,
       "builder": "tools/blender-city-citizen.py"
+    },
+    {
+      "type": "CITY_CITIZEN_F",
+      "portable": "city-citizen-f.glb",
+      "outfit": "city_blouse",
+      "hairstyles": 7,
+      "builder": "tools/blender-city-street.py"
+    },
+    {
+      "type": "CITY_NEUTRAL_M",
+      "portable": "city-neutral-m.glb",
+      "outfit": "city_work_vest",
+      "hairstyles": 7,
+      "builder": "tools/blender-city-street.py"
+    },
+    {
+      "type": "CITY_THUG_M",
+      "portable": "city-thug-m.glb",
+      "outfit": "city_tracksuit",
+      "hairstyles": 7,
+      "builder": "tools/blender-city-street.py"
     }
   ]
 }

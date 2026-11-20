@@ -3,6 +3,9 @@
 // gives the model volume. Living rendering resolves its finite camera later.
 // No animation clocks, random numbers or mutable game state live in this file.
 const PLAYER3D_HEAD_SCALE = 1;
+const CITY3D_GARMENTS = Object.freeze({
+  CITY_CITIZEN_F:'city_blouse', CITY_NEUTRAL_M:'city_work_vest', CITY_THUG_M:'city_tracksuit'
+});
 const Player3DMath = (() => {
   const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,Number(x)||0));
   const point=(x=0,y=0,z=0)=>({x:Number(x)||0,y:Number(y)||0,z:Number(z)||0});
@@ -137,6 +140,14 @@ function player3DPose(actor, options = {}) {
   let angle=Number.isFinite(options.angle)?options.angle:Number(c.aimAngle)||0;
   if(mode==='QUICKDRAW'&&Number(options.projectionX)>0)angle=Math.atan2(Math.sin(angle),Math.cos(angle)*options.projectionX);
   const identity=options.identity||safe(()=>figureIdentity(c),c)||c;
+  const cityResident=options.npc===true && !options.skeleton && c.isCityCivilian;
+  const streetResident=cityResident && cityStreetLook(c);
+  // cityActivityPose caches its answer. Keep that cache on the pose copy.
+  let streetAction=null;
+  if(streetResident && !c.isArmed && c.cityActivity) {
+    c._cityActivityPose=null;
+    streetAction=cityActivityPose(c);
+  }
   const palette={skin:M.color(identity.skinCol||c.skinCol,[235,180,140]),shirt:M.color(identity.shirtCol||c.shirtCol,[200,30,30]),
     pants:M.color(identity.pantsCol||c.pantsCol,[30,80,180]),steel:[59,68,79],wood:[128,77,37],gold:[172,136,61]};
   if(!c.isPlayer&&c.eType==='BANDIT'&&!identity.skinCol&&!c.skinCol)palette.skin=[214,168,132];
@@ -267,7 +278,7 @@ function player3DPose(actor, options = {}) {
         // Native walking elbows were deliberately authored in projection.
         // Keep those exact XY points and reconstruct only their height: solving
         // another IK chain here destroyed the original tucked runner's arms.
-        const swing=Math.sin(cycle)*gait.swing*motion,rest=c.isMoving?0:Math.sin(frame*.045+c.x*.01);
+        const swing=Math.sin(cycle)*gait.swing*motion*(streetResident?1.12:1),rest=c.isMoving?0:Math.sin(frame*.045+c.x*.01);
         const SH=bh*.425,reach=(R.upper+R.fore)*(typeof STAND_FORE_ARM==='number'?STAND_FORE_ARM:.65);
         const projectedScale=(typeof STAND_FORE_ARM==='number'?STAND_FORE_ARM:.65)+.16*gait.bend;
         const PU=R.upper*projectedScale,PF=R.fore*projectedScale;
@@ -426,6 +437,19 @@ function player3DPose(actor, options = {}) {
     }
   }
   if(!p||!p.head||!p.chest||!p.pelvis)return null;
+  if(streetAction && streetAction.amount>0 && !options.pose && p.arms[1]) {
+    const arm=p.arms[1], heading=p.chestHeading;
+    const wrist=rotate(sub(arm.fist,p.chest),-heading);
+    // Preserve the native hand target in the chest plane, and lift the wrist
+    // to the cheek or mouth over the same reach/use/lower interval.
+    const target=cityStreetActionHand(streetAction,wrist.x,wrist.y);
+    const t=clamp(streetAction.amount), raise=t*t*(3-2*t);
+    const useHeight=p.head.z-(streetAction.kind==='PHONE'?0:2);
+    const hand=add(p.chest,rotatePoint(target.x,target.y,wrist.z+(useHeight-arm.fist.z)*raise,heading));
+    const pole=add(p.chest,rotatePoint(-4,bh*.65,-3,heading));
+    arm.elbow=mix(arm.elbow,M.elbow(arm.shoulder,hand,R.upper,R.fore,pole),raise);
+    arm.fist=hand;
+  }
   const widthScale=Number(options.widthScale)>0?Number(options.widthScale):1;
   const parts=[],sockets={head:point(p.head.x,p.head.y,p.head.z),chest:point(p.chest.x,p.chest.y,p.chest.z),pelvis:point(p.pelvis.x,p.pelvis.y,p.pelvis.z)};
   const forward=p.forward||rotatePoint(1,0,0),up=p.up||M.norm(sub(p.head,p.pelvis));
@@ -483,20 +507,40 @@ function player3DPose(actor, options = {}) {
   // read as eggs, even when their standing XY footprint was fitted round.
   const headRadius=(nativeFrames?p.headProjectedDiameter*.5:Number(p.headRadius)||5.5)*PLAYER3D_HEAD_SCALE;
   oval('head',p.head,headRadius,headRadius,headRadius,palette.skin,'head',headBasis);
-  if(options.npc===true&&!c.isPlayer&&c.eType==='CITY_CITIZEN_M'&&!options.skeleton) {
-    const style=Math.max(0,Math.min(3,Number(identity.clothingStyle)||0));
+  if(cityResident) {
+    const style=clamp(identity.clothingStyle,0,3)|0;
+    const garment=CITY3D_GARMENTS[c.eType] || 'citizen_outfit_'+style;
     const torso=parts.find(part=>part.part==='torso');
-    if(torso&&selected('civilian_clothing')&&assetMeshes&&assetMeshes['citizen_outfit_'+style]) {
+    if(torso&&selected('civilian_clothing')&&assetMeshes&&assetMeshes[garment]) {
       const light=palette.shirt.map(v=>Math.min(255,v*.78+55));
       const dark=palette.shirt.map(v=>v*.70);
-      addPart('citizen_outfit_'+style,hitFlash?flashColor:light,torso.matrix,'civilian_clothing');
-      parts[parts.length-1].materials={shirt:(hitFlash?flashColor:light).map(v=>v/255),
-        armor:(hitFlash?flashColor:dark).map(v=>v/255),white:(hitFlash?flashColor:[229,224,202]).map(v=>v/255)};
+      const trim=[229,224,202];
+      let cloth=light, piping=trim;
+      if(garment==='city_blouse') {
+        cloth=[light,dark,trim,palette.shirt][style];
+        piping=style===2?dark:trim;
+      } else if(garment==='city_tracksuit') cloth=palette.shirt;
+      const tint=rgb=>(hitFlash?flashColor:rgb).map(v=>v/255);
+      addPart(garment,cloth,torso.matrix,'civilian_clothing');
+      parts[parts.length-1].materials={shirt:tint(cloth),armor:tint(dark),white:tint(piping),
+        khaki:tint(palette.pants.map(v=>Math.min(255,v*.8+72))),gold:tint(M.color(identity.cityAccentCol,[244,197,54]))};
     }
-    const hair=Math.max(0,Math.min(6,Number(identity.hairStyle)||0));
+    let hair=clamp(identity.hairStyle,0,6)|0;
+    const length=identity.cityHairLength||0;
+    // Street saves store cut and length separately. The tied silhouette
+    // belongs to the long version of these cuts, not the cropped one.
+    if(streetResident) {
+      if(hair===3||hair===5) hair=length===2?3:0;
+      else if(hair===4) hair=1;
+    }
+    const hairColor=M.color(identity.hairCol||c.hairCol,[32,27,26]);
+    // Tip the new residents' hairline back on the round scalp. This reveals
+    // the forehead from the overhead camera without scaling or moving the head.
+    const scalp=nativeFrames&&CITY3D_GARMENTS[c.eType]?M.postureFrame(p.chestHeading,pitch-.56):headBasis;
     if(assetMeshes&&assetMeshes['citizen_hair_'+hair])
-      oval('citizen_hair_'+hair,p.head,headRadius,headRadius,headRadius,
-        M.color(identity.hairCol||c.hairCol,[32,27,26]),'civilian_hair',headBasis);
+      oval('citizen_hair_'+hair,p.head,headRadius,headRadius,headRadius,hairColor,'civilian_hair',scalp);
+    if(streetResident && length>0 && hair!==3)
+      oval('city_nape',p.head,headRadius*(length===1?.82:1),headRadius,headRadius,hairColor,'civilian_nape',scalp);
   }
   const arms=p.arms||[],legs=p.legs||[];
   arms.forEach((arm,i)=>{
@@ -504,18 +548,44 @@ function player3DPose(actor, options = {}) {
     const shoulder=arm.shoulder,elbow=arm.elbow,hand=arm.fist||arm.hand;
     if(!shoulder||!elbow||!hand)return;
     sockets[tag+'Shoulder']=point(shoulder.x,shoulder.y,shoulder.z);sockets[tag+'Elbow']=point(elbow.x,elbow.y,elbow.z);sockets[tag+'Hand']=point(hand.x,hand.y,hand.z);sockets[tag+'Fist']=sockets[tag+'Hand'];
-    bone('upper_arm',shoulder,elbow,arm.widths?arm.widths[0]:R.upperW,palette.shirt,'upper_arm_'+tag);
+    const armColor=streetResident?palette.skin:palette.shirt;
+    bone('upper_arm',shoulder,elbow,arm.widths?arm.widths[0]:R.upperW,armColor,'upper_arm_'+tag);
+    if(streetResident && identity.clothingStyle!==1) {
+      const sleeveWidth=(arm.widths?arm.widths[0]:R.upperW)*1.10;
+      bone('upper_arm',shoulder,mix(shoulder,elbow,.66),sleeveWidth,palette.shirt,'city_sleeve_'+tag);
+    }
     // Short rigid shoulder caps make the armored pistol role read heavier
     // without altering the authored shoulder, elbow or wrist positions.
     if(armoredGuard&&!options.skeleton){
       const sleeve=arm.widths?arm.widths[0]:R.upperW;
       bone('upper_arm',shoulder,mix(shoulder,elbow,.38),sleeve*1.16,[100,104,112],'armor_shoulder_'+tag,sleeve*1.08);
     }
-    bone('forearm',elbow,hand,R.foreW*(arm.widths?arm.widths[0]/R.upperW:1),palette.shirt,'forearm_'+tag);
-    if(assetMeshes&&assetMeshes.joint&&!options.skeleton)oval('joint',elbow,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,palette.shirt,'upper_arm_'+tag,M.postureFrame(0));
+    bone('forearm',elbow,hand,R.foreW*(arm.widths?arm.widths[0]/R.upperW:1),armColor,'forearm_'+tag);
+    if(assetMeshes&&assetMeshes.joint&&!options.skeleton)oval('joint',elbow,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,(arm.widths?arm.widths[1]:(R.upperW+R.foreW)*.5)*.5*widthScale,armColor,'upper_arm_'+tag,M.postureFrame(0));
     if(nativeFrames)fittedOval('hand',hand,(arm.handDiameter||R.hand)*widthScale,(arm.handDiameter||R.hand)*widthScale,R.hand*.42*widthScale,chemist&&side<0?[177,184,194]:palette.skin,'hand_'+tag,M.postureFrame(p.chestHeading),p.chestHeading);
     else oval('hand',hand,R.hand*.43*widthScale,R.hand*.43*widthScale,R.hand*.42*widthScale,chemist&&side<0?[177,184,194]:palette.skin,'hand_'+tag);
   });
+  if(streetAction && streetAction.amount>0 && sockets.rightHand) {
+    const hand=sockets.rightHand, t=clamp(streetAction.amount), up=point(0,0,1);
+    const heading=nativeFrames?p.chestHeading:angle;
+    // Grip origins sit at the fingers, just above the palm surface. Every
+    // prop uses the same posed wrist as the hand and the model shadow.
+    const grip=add(hand,point(0,0,2.1));
+    if(streetAction.kind==='PHONE') {
+      const yaw=heading-.17*t, tilt=.85*t;
+      const x=rotatePoint(1,0,0,yaw), y=rotatePoint(0,Math.cos(tilt),-Math.sin(tilt),yaw);
+      addPart('city_phone',[32,39,49],M.matrix(grip,x,y,M.cross(x,y),7.4,7.4,7.4),'held_phone');
+    } else if(streetAction.kind==='SMOKE') {
+      const x=rotatePoint(1,0,0,heading-.45*t);
+      addPart('city_cigarette',[166,111,65],M.matrix(grip,x,M.cross(up,x),up,5.9,5.9,5.9),'held_cigarette');
+      sockets.ember=add(grip,mul(x,.9*5.9));
+    } else if(streetAction.kind==='BOTTLE') {
+      const tilt=.4+.75*t;
+      const axis=rotatePoint(-.75*Math.sin(tilt),-.66*Math.sin(tilt),Math.cos(tilt),heading);
+      const bottle=M.frame(axis,rotatePoint(1,0,0,heading));
+      addPart('flask',[45,116,72],M.matrix(grip,bottle.x,bottle.y,bottle.z,4.5,4.5,5.4),'held_bottle');
+    }
+  }
   legs.forEach((leg,i)=>{
     const tag=i?'right':'left';if(!leg.hip||!leg.knee||!leg.ankle)return;
     sockets[tag+'Hip']=point(leg.hip.x,leg.hip.y,leg.hip.z);sockets[tag+'Knee']=point(leg.knee.x,leg.knee.y,leg.knee.z);sockets[tag+'Ankle']=point(leg.ankle.x,leg.ankle.y,leg.ankle.z);

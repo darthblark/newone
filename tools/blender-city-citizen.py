@@ -164,7 +164,9 @@ bpy.context.preferences.filepaths.save_version = 0
 bpy.ops.wm.save_as_mainfile(filepath=str(out / 'player.blend'))
 manifest = json.loads((out / 'manifest.json').read_text())
 manifest['meshCount'] = len(data['meshes'])
-manifest['civilianVariants'] = [{'type': 'CITY_CITIZEN_M', 'portable': 'city-citizen-m.glb',
-                               'outfits': 4, 'hairstyles': 7, 'builder': 'tools/blender-city-citizen.py'}]
+variant = {'type': 'CITY_CITIZEN_M', 'portable': 'city-citizen-m.glb',
+           'outfits': 4, 'hairstyles': 7, 'builder': 'tools/blender-city-citizen.py'}
+manifest['civilianVariants'] = [variant] + [entry for entry in manifest.get('civilianVariants', [])
+                                           if entry['type'] != variant['type']]
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
 print('CITY_CITIZEN_READY', len(geometries), 'new meshes; existing meshes preserved')

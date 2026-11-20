@@ -16,6 +16,7 @@ const out=process.env.CITY_ART_OUT||'/tmp/newone-city-subclasses';fs.mkdirSync(o
   await page.waitForFunction('window.__ready');
   const report=await page.evaluate(()=>{
    currentLevel=currentBiome=1;BIOME_ACTIVE=true;GLRig.on=GLRig.ok=false;
+   Player3D.enabled=false; // This suite traces the native Canvas palms and props.
    activeBuildings=[];activeParkingCars=[];barrels=[];buildings=[];enemiesList=[];
    camX=camY=0;zoom=1;LIGHT_DX=-.7;LIGHT_DY=.7;
    leftStick={active:false,dx:0,dy:0};rightStick={active:false,dx:0,dy:0,dist:0};

@@ -1,50 +1,26 @@
-# City civilian Blender rollout
+# City residents in Blender
 
-This first, bounded pass converts **CITY_CITIZEN_M** only. It uses the existing
-player/human animation rig, camera projection, lighting, and Claude's Level 1
-model shadows. Other NPC families can follow in separate passes.
+The four Level 1 city residents use the shared human rig and posed model shadows for standing and walking. The city thug also uses the rig when drawing, firing and reloading his pistol. Boxing, injuries, low stances and corpses use their established painters.
 
-The family keeps its seeded skin, hair, shirt and trouser colors, four clothing
-styles (shirt, vest, tie, stripes), and seven hairstyles. Blender-authored cloth
-details use the exact torso transform; open hair caps use the spherical head's
-transform. Each civilian adds two mesh parts. Hair is at most 592 triangles;
-clothing details are small shared meshes. There is no new renderer or context.
+| Game character | Clothing and animation |
+| --- | --- |
+| CITY_CITIZEN_M | Four seeded shirt outfits and seven hairstyles |
+| CITY_CITIZEN_F | Blouse with a shoulder yoke and neckline trim, fitted to her native torso dimensions |
+| CITY_NEUTRAL_M | Pocketed work vest, short or cut-off sleeves, phone, cigarette and bottle gestures |
+| CITY_THUG_M | Purple tracksuit with gold tape, smoking and pistol poses |
 
-Only living, standing, unarmed city men opt in. Injured, prone, crouching,
-stunned, mounted, boxing and dead characters retain their existing painters.
-Rendering does not change allegiance, civilian behavior or weapon state, and
-disabling/unavailable WebGL retains the native painter.
+The garments attach to the chest so the shoulders can turn independently of the hips. Each street gesture follows the existing activity clock and hand target. The prop follows the resulting wrist position as the character raises or lowers it. The cigarette wisp starts at the projected ember. [Watch the in-game poses](city-residents.webp).
 
-The 37 previous meshes and original runtime palette are preserved exactly.
-Claude's embedded renderer changes were also synchronized into their three
-source modules so later asset builds preserve the new building/shadow work.
+## Editing and rebuilding
 
-## Assets and rebuilding
+The editable models are in `assets/player/player.blend`, in **City civilian variants** and **City street wardrobe**. Each resident also has a portable rigged GLB listed in [the asset manifest](../assets/player/manifest.json).
 
-- Editable source: `assets/player/player.blend`, collection **City civilian variants**.
-- Portable example: `assets/player/city-citizen-m.glb` (vest and cropped hair).
-- Runtime library: `assets/player/player-mesh.json`, embedded in `game.js` for SPCK.
-- Preview: [native / Blender comparison](civilian3d-preview.png).
-
-Append or refresh this family after building the base player asset:
+After a factory rebuild of the player rig, export the two city collections in this order and embed the result for SPCK.
 
 ```sh
-blender --background assets/player/player.blend --python tools/blender-city-citizen.py
+blender --background assets/player/player.blend --python-exit-code 1 --python tools/blender-city-citizen.py
+blender --background assets/player/player.blend --python-exit-code 1 --python tools/blender-city-street.py
 python3 tools/build-player3d.py
 ```
 
-The append tool updates only its own meshes, retains other source objects and
-preserves the previous runtime geometry. A factory rebuild of the base player
-must be followed by this append step.
-
-## Validation
-
-`node tools/check-npc3d-browser.cjs` exercises actual p5/Chromium WebGL rendering:
-four outfits, seven hairstyles, camera angles, visible outfit differences,
-one body submission per actor, Level 1 model shadows, pose/state purity,
-native exclusions and renderer-disable fallback. It reports no GPU errors.
-The saved report is [civilian3d-validation.json](civilian3d-validation.json).
-
-Existing player checks (389) and enemy dispatch checks (348) pass. All three
-embedded renderer source checks pass. Headless Chromium checks correctness;
-Android/SPCK performance still needs device observation.
+Run `node tools/check-npc3d-browser.cjs` to exercise the residents through the p5 and WebGL renderers. The check covers clothing visibility, reach/use/lower hand contact, armed thug dispatch, Level 1 model shadows and native fallbacks. [Browser check results](civilian3d-validation.json).
